@@ -1,15 +1,16 @@
 const mongoose = require('mongoose');
 
 const PrescriptionSchema = new mongoose.Schema({
-    blockchainId: { type: Number, required: true, unique: true },
+    blockchainId: { type: String, required: true, unique: true },
     doctorAddress: { type: String, required: true },
-    patientName: { type: String, required: true }, // Off-chain PII
-    patientAge: { type: Number },
-    medicineDetails: {
+    diagnosis: { type: String },
+    allergies: { type: String },
+    medicines: [{
         name: { type: String, required: true },
         dosage: { type: String },
-        quantity: { type: Number, required: true }
-    },
+        quantity: { type: Number, required: true },
+        instructions: { type: String }
+    }],
     notes: { type: String },
     issuedAt: { type: Date, default: Date.now }
 });

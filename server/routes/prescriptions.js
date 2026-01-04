@@ -5,20 +5,29 @@ const PrescriptionLog = require('../models/PrescriptionLog');
 // Store Prescription Metadata (Called by Frontend after Blockchain Tx)
 router.post('/', async (req, res) => {
     try {
-        const { blockchainId, doctorAddress, patientName, patientAge, medicineDetails, notes } = req.body;
+        const { blockchainId, doctorAddress, patientName, patientAge, diagnosis, allergies, medicines, notes } = req.body;
 
-        const newLog = new PrescriptionLog({
-            blockchainId,
-            doctorAddress,
-            patientName,
-            patientAge,
-            medicineDetails,
-            notes
-        });
+        // Use upsert to handle cases where blockchain resets but DB persists
+        // This updates the existing record if blockchainId exists, or creates a new one
+        const savedLog = await PrescriptionLog.findOneAndUpdate(
+            { blockchainId },
+            {
+                blockchainId,
+                doctorAddress,
+                patientName,
+                patientAge,
+                diagnosis,
+                allergies,
+                medicines,
+                notes,
+                issuedAt: new Date() // Update timestamp on overwrite
+            },
+            { upsert: true, new: true, setDefaultsOnInsert: true }
+        );
 
-        await newLog.save();
-        res.status(201).json({ success: true, data: newLog });
+        res.status(201).json({ success: true, data: savedLog });
     } catch (error) {
+        console.error("❌ Prescription Save Error:", error);
         res.status(500).json({ success: false, error: error.message });
     }
 });

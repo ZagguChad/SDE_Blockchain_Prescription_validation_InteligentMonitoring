@@ -3,6 +3,9 @@ const fs = require("fs");
 const path = require("path");
 
 async function main() {
+    const [deployer] = await hre.ethers.getSigners();
+    console.log("Deploying contracts with the account:", deployer.address);
+
     const PrescriptionRegistry = await hre.ethers.getContractFactory("PrescriptionRegistry");
     const registry = await PrescriptionRegistry.deploy();
 
@@ -11,9 +14,27 @@ async function main() {
     const address = await registry.getAddress();
     console.log(`PrescriptionRegistry deployed to ${address}`);
 
-    // Save ABI and Address to a generic location or just log it
-    // For this demo, we can save it to server and client if they exist
-    // But let's just log it first.
+    // AUTOMATION: Register the deployer as a doctor so validation works immediately
+    console.log("Registering deployer as a doctor...");
+    const tx = await registry.registerDoctor(deployer.address);
+    await tx.wait();
+    console.log("Deployer registered as Doctor.");
+
+    // SAVE ARTIFACTS
+    const artifactPath = path.join(__dirname, "../../client/src/contractInfo.json");
+    const artifactData = {
+        address: address,
+        abi: JSON.parse(registry.interface.formatJson())
+    };
+
+    // Ensure directory exists
+    const dir = path.dirname(artifactPath);
+    if (!fs.existsSync(dir)) {
+        fs.mkdirSync(dir, { recursive: true });
+    }
+
+    fs.writeFileSync(artifactPath, JSON.stringify(artifactData, null, 2));
+    console.log(`Contract metadata saved to ${artifactPath}`);
 }
 
 main().catch((error) => {

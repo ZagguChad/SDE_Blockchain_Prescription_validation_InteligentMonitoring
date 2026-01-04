@@ -2,12 +2,10 @@ import { useState } from 'react';
 import { ethers } from 'ethers';
 import axios from 'axios';
 
-const CONTRACT_ADDRESS = "0x9fE46736679d2D9a65F0992F2272dE9f3c7fa6e0";
-const ABI = [
-    "function getPrescription(uint256 _id) external view returns (tuple(uint256 id, address issuer, bytes32 patientHash, bytes32 medicationHash, uint256 quantity, uint8 status, uint256 timestamp))",
-    "function dispensePrescription(uint256 _id) external",
-    "event PrescriptionDispensed(uint256 indexed id, address indexed pharmacy)"
-];
+import contractInfo from '../contractInfo.json';
+
+const CONTRACT_ADDRESS = contractInfo.address;
+const ABI = contractInfo.abi;
 
 const PharmacyDashboard = ({ account }) => {
     const [searchId, setSearchId] = useState('');
@@ -37,9 +35,19 @@ const PharmacyDashboard = ({ account }) => {
             // 2. Get On-chain Status
             const provider = new ethers.BrowserProvider(window.ethereum);
             const contract = new ethers.Contract(CONTRACT_ADDRESS, ABI, provider);
-            const p = await contract.getPrescription(searchId);
+
+            // Pass the ID as a bytes32 encoded string to find it on-chain
+            const formattedId = ethers.encodeBytes32String(searchId);
+            const p = await contract.getPrescription(formattedId);
 
             // p is a Result object or struct
+            if (p.issuer === ethers.ZeroAddress) {
+                setStatus('Prescription found in DB but NOT on Blockchain (Sync Error?)');
+                setChainData(null);
+                setLoading(false);
+                return;
+            }
+
             setChainData({
                 status: p.status === 0n ? 'ISSUED' : 'DISPENSED', // 0=ISSUED, 1=DISPENSED
                 issuer: p.issuer
@@ -61,7 +69,8 @@ const PharmacyDashboard = ({ account }) => {
             const signer = await provider.getSigner();
             const contract = new ethers.Contract(CONTRACT_ADDRESS, ABI, signer);
 
-            const tx = await contract.dispensePrescription(searchId);
+            const formattedId = ethers.encodeBytes32String(searchId);
+            const tx = await contract.dispensePrescription(formattedId);
             setStatus('Dispensing transaction sent...');
             await tx.wait();
 
@@ -105,8 +114,16 @@ const PharmacyDashboard = ({ account }) => {
 
                         <div style={{ display: 'grid', gap: '0.5rem', color: 'var(--text-main)' }}>
                             <p><strong style={{ color: 'var(--text-muted)' }}>Patient:</strong> {data.patientName} (Age: {data.patientAge})</p>
-                            <p><strong style={{ color: 'var(--text-muted)' }}>Medicine:</strong> {data.medicineDetails.name}</p>
-                            <p><strong style={{ color: 'var(--text-muted)' }}>Quantity:</strong> {data.medicineDetails.quantity}</p>
+
+                            <div>
+                                <strong style={{ color: 'var(--text-muted)' }}>Medicines:</strong>
+                                <ul style={{ paddingLeft: '1.2rem', marginTop: '0.2rem' }}>
+                                    {data.medicines && data.medicines.map((m, i) => (
+                                        <li key={i}>{m.name} ({m.dosage}) - Qty: {m.quantity}</li>
+                                    ))}
+                                </ul>
+                            </div>
+
                             <p><strong style={{ color: 'var(--text-muted)' }}>Notes:</strong> {data.notes}</p>
                             <p><strong style={{ color: 'var(--text-muted)' }}>Doctor:</strong> <span style={{ fontFamily: 'monospace', fontSize: '0.9em' }}>{data.doctorAddress}</span></p>
                         </div>

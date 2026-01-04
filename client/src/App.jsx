@@ -72,11 +72,31 @@ function Navbar({ account, connectWallet, setupNetwork }) {
 function App() {
   const [account, setAccount] = useState(null);
 
+  const checkNetwork = async () => {
+    if (!window.ethereum) return;
+    const chainId = await window.ethereum.request({ method: 'eth_chainId' });
+    // 0x7A69 is 31337 (Localhost Hardhat default)
+    if (chainId !== '0x7a69') {
+      try {
+        await window.ethereum.request({
+          method: 'wallet_switchEthereumChain',
+          params: [{ chainId: '0x7A69' }],
+        });
+      } catch (switchError) {
+        // This error code means the chain has not been added to MetaMask.
+        if (switchError.code === 4902) {
+          setupNetwork();
+        }
+      }
+    }
+  };
+
   const connectWallet = async () => {
     if (window.ethereum) {
       try {
         const accounts = await window.ethereum.request({ method: 'eth_requestAccounts' });
         setAccount(accounts[0]);
+        await checkNetwork();
       } catch (err) { console.error(err); }
     } else {
       alert("Please install MetaMask!");
@@ -95,9 +115,17 @@ function App() {
         }]
       });
     } catch (err) {
-      alert("Error adding network: " + err.message);
+      console.error("Error adding network: ", err);
     }
   };
+
+  useEffect(() => {
+    if (window.ethereum) {
+      window.ethereum.on('chainChanged', () => {
+        window.location.reload();
+      });
+    }
+  }, []);
 
   return (
     <Router>

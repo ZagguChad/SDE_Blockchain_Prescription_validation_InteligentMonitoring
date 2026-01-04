@@ -10,7 +10,11 @@ app.use(express.json());
 const prescriptionRoutes = require('./routes/prescriptions');
 const { GoogleGenerativeAI } = require('@google/generative-ai');
 
-const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
+if (!process.env.GEMINI_API_KEY) {
+    console.warn("⚠️ WARNING: GEMINI_API_KEY is missing in .env file. AI features will fail.");
+}
+
+const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY || "missing_key");
 
 app.use('/api/prescriptions', prescriptionRoutes);
 
@@ -18,6 +22,10 @@ app.post('/api/parse-prescription', async (req, res) => {
     try {
         const { transcript } = req.body;
         if (!transcript) return res.status(400).json({ success: false, error: 'No transcript provided' });
+
+        if (!process.env.GEMINI_API_KEY) {
+            return res.status(503).json({ success: false, error: 'Server Authorization Error: GEMINI_API_KEY is missing.' });
+        }
 
         const model = genAI.getGenerativeModel({ model: "gemini-1.5-flash" });
         const prompt = `

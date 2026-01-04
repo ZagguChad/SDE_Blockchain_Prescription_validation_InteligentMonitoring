@@ -6,7 +6,7 @@ contract PrescriptionRegistry {
     enum Status { ISSUED, DISPENSED }
 
     struct Prescription {
-        uint256 id;
+        bytes32 id;
         address issuer;
         bytes32 patientHash;
         bytes32 medicationHash;
@@ -15,15 +15,15 @@ contract PrescriptionRegistry {
         uint256 timestamp;
     }
 
-    mapping(uint256 => Prescription) public prescriptions;
+    mapping(bytes32 => Prescription) public prescriptions;
     mapping(address => bool) public doctors;
     mapping(address => bool) public pharmacies;
 
     address public owner;
-    uint256 public prescriptionCount;
+    // uint256 public prescriptionCount; // Removed as we use custom IDs
 
-    event PrescriptionIssued(uint256 indexed id, address indexed issuer, bytes32 patientHash);
-    event PrescriptionDispensed(uint256 indexed id, address indexed pharmacy);
+    event PrescriptionIssued(bytes32 indexed id, address indexed issuer, bytes32 patientHash);
+    event PrescriptionDispensed(bytes32 indexed id, address indexed pharmacy);
     event RoleGranted(bytes32 role, address indexed account);
 
     modifier onlyOwner() {
@@ -55,10 +55,11 @@ contract PrescriptionRegistry {
         emit RoleGranted(keccak256("PHARMACY"), _pharmacy);
     }
 
-    function issuePrescription(bytes32 _patientHash, bytes32 _medicationHash, uint256 _quantity) external {
-        prescriptionCount++;
-        prescriptions[prescriptionCount] = Prescription({
-            id: prescriptionCount,
+    function issuePrescription(bytes32 _id, bytes32 _patientHash, bytes32 _medicationHash, uint256 _quantity) external onlyDoctor {
+        require(prescriptions[_id].id == bytes32(0), "ID already exists");
+        
+        prescriptions[_id] = Prescription({
+            id: _id,
             issuer: msg.sender,
             patientHash: _patientHash,
             medicationHash: _medicationHash,
@@ -67,23 +68,23 @@ contract PrescriptionRegistry {
             timestamp: block.timestamp
         });
 
-        emit PrescriptionIssued(prescriptionCount, msg.sender, _patientHash);
+        emit PrescriptionIssued(_id, msg.sender, _patientHash);
     }
 
-    function dispensePrescription(uint256 _id) external onlyPharmacy {
-        require(_id > 0 && _id <= prescriptionCount, "Invalid ID");
+    function dispensePrescription(bytes32 _id) external onlyPharmacy {
+        require(prescriptions[_id].id != bytes32(0), "Invalid ID");
         require(prescriptions[_id].status == Status.ISSUED, "Already dispensed or invalid");
 
         prescriptions[_id].status = Status.DISPENSED;
         emit PrescriptionDispensed(_id, msg.sender);
     }
 
-    function getPrescription(uint256 _id) external view returns (Prescription memory) {
+    function getPrescription(bytes32 _id) external view returns (Prescription memory) {
         return prescriptions[_id];
     }
     
-    function verifyPrescription(uint256 _id) external view returns (bool, Status) {
-        if (_id == 0 || _id > prescriptionCount) return (false, Status.ISSUED);
+    function verifyPrescription(bytes32 _id) external view returns (bool, Status) {
+        if (prescriptions[_id].id == bytes32(0)) return (false, Status.ISSUED);
         return (true, prescriptions[_id].status);
     }
 }
