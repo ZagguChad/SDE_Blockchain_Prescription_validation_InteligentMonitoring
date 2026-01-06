@@ -133,6 +133,10 @@
               "name": "quantity"
             },
             {
+              "type": "uint256",
+              "name": "expiryDate"
+            },
+            {
               "type": "uint8",
               "name": "status"
             },
@@ -165,6 +169,10 @@
         {
           "type": "uint256",
           "name": "_quantity"
+        },
+        {
+          "type": "uint256",
+          "name": "_expiryDate"
         }
       ],
       "outputs": []
@@ -234,6 +242,10 @@
         {
           "type": "uint256",
           "name": "quantity"
+        },
+        {
+          "type": "uint256",
+          "name": "expiryDate"
         },
         {
           "type": "uint8",

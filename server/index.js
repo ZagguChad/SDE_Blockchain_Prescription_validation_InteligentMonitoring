@@ -8,59 +8,11 @@ app.use(cors());
 app.use(express.json());
 
 const prescriptionRoutes = require('./routes/prescriptions');
-const { GoogleGenerativeAI } = require('@google/generative-ai');
+const analyticsRoutes = require('./routes/analytics');
 
-if (!process.env.GEMINI_API_KEY) {
-    console.warn("⚠️ WARNING: GEMINI_API_KEY is missing in .env file. AI features will fail.");
-}
-
-const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY || "missing_key");
-
+// Mount Routes
 app.use('/api/prescriptions', prescriptionRoutes);
-
-app.post('/api/parse-prescription', async (req, res) => {
-    try {
-        const { transcript } = req.body;
-        if (!transcript) return res.status(400).json({ success: false, error: 'No transcript provided' });
-
-        if (!process.env.GEMINI_API_KEY) {
-            return res.status(503).json({ success: false, error: 'Server Authorization Error: GEMINI_API_KEY is missing.' });
-        }
-
-        const model = genAI.getGenerativeModel({ model: "gemini-1.5-flash" });
-        const prompt = `
-            You are a helpful medical assistant. Extract the following details from the doctor's spoken text:
-            - patientName (String)
-            - age (Number or String)
-            - medicine (String, include dosage if present)
-            - quantity (Number)
-            - notes (String summary of instructions)
-
-            Return ONLY a valid JSON object. Do not use Markdown code blocks. Keys: patientName, age, medicine, quantity, notes.
-            If a value is not found, set it to null.
-            
-            Text: "${transcript}"
-        `;
-
-        const result = await model.generateContent(prompt);
-        const response = await result.response;
-        let text = response.text();
-
-        // Cleanup if model returns markdown
-        text = text.replace(/```json/g, '').replace(/```/g, '').trim();
-
-        const data = JSON.parse(text);
-        res.json({ success: true, data });
-
-    } catch (error) {
-        console.error('AI Parse Error:', error);
-        res.status(500).json({ success: false, error: error.message });
-    }
-});
-
-app.get('/', (req, res) => {
-    res.send('Blockchain Prescription API is running');
-});
+app.use('/api/analytics', analyticsRoutes);
 
 // MongoDB Connection
 mongoose.connect(process.env.MONGO_URI || 'mongodb://localhost:27017/blockchain-prescription')

@@ -12,6 +12,9 @@ const PrescriptionSchema = new mongoose.Schema({
         instructions: { type: String }
     }],
     notes: { type: String },
+    expiryDate: { type: Date },
+    status: { type: String, enum: ['ACTIVE', 'DISPENSED', 'EXPIRED'], default: 'ACTIVE' },
+    dispensedAt: { type: Date },
     issuedAt: { type: Date, default: Date.now }
 });
 

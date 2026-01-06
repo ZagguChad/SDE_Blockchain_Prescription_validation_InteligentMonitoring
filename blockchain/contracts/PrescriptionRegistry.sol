@@ -11,6 +11,7 @@ contract PrescriptionRegistry {
         bytes32 patientHash;
         bytes32 medicationHash;
         uint256 quantity; // or other metadata
+        uint256 expiryDate; // New validation field
         Status status;
         uint256 timestamp;
     }
@@ -55,8 +56,9 @@ contract PrescriptionRegistry {
         emit RoleGranted(keccak256("PHARMACY"), _pharmacy);
     }
 
-    function issuePrescription(bytes32 _id, bytes32 _patientHash, bytes32 _medicationHash, uint256 _quantity) external onlyDoctor {
+    function issuePrescription(bytes32 _id, bytes32 _patientHash, bytes32 _medicationHash, uint256 _quantity, uint256 _expiryDate) external onlyDoctor {
         require(prescriptions[_id].id == bytes32(0), "ID already exists");
+        require(_expiryDate > block.timestamp, "Expiry must be in future");
         
         prescriptions[_id] = Prescription({
             id: _id,
@@ -64,6 +66,7 @@ contract PrescriptionRegistry {
             patientHash: _patientHash,
             medicationHash: _medicationHash,
             quantity: _quantity,
+            expiryDate: _expiryDate,
             status: Status.ISSUED,
             timestamp: block.timestamp
         });
@@ -73,7 +76,8 @@ contract PrescriptionRegistry {
 
     function dispensePrescription(bytes32 _id) external onlyPharmacy {
         require(prescriptions[_id].id != bytes32(0), "Invalid ID");
-        require(prescriptions[_id].status == Status.ISSUED, "Already dispensed or invalid");
+        require(prescriptions[_id].status == Status.ISSUED, "Already dispensed");
+        require(block.timestamp <= prescriptions[_id].expiryDate, "Prescription expired");
 
         prescriptions[_id].status = Status.DISPENSED;
         emit PrescriptionDispensed(_id, msg.sender);

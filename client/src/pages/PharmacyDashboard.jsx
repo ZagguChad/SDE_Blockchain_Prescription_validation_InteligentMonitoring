@@ -79,7 +79,13 @@ const PharmacyDashboard = ({ account }) => {
 
         } catch (error) {
             console.error(error);
-            setStatus('Error dispensing: ' + error.reason);
+            // Parse common errors for better UX
+            let msg = error.reason || error.message;
+            if (msg.includes("Not a pharmacy")) msg = "Access Denied: You are not a registered Pharmacy.";
+            if (msg.includes("Prescription expired")) msg = "Cannot dispense: Prescription has EXPIRED.";
+            if (msg.includes("Already dispensed")) msg = "Prescription has already been dispensed.";
+
+            setStatus('Error: ' + msg);
         }
         setLoading(false);
     };
@@ -107,9 +113,16 @@ const PharmacyDashboard = ({ account }) => {
                     <div className="mt-4 animate-fade" style={{ background: 'rgba(0,0,0,0.2)', padding: '1.5rem', borderRadius: 'var(--radius-sm)' }}>
                         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1rem' }}>
                             <h3 style={{ margin: 0 }}>#{data.blockchainId}</h3>
-                            <span className={chainData.status === 'ISSUED' ? 'badge badge-success' : 'badge badge-error'}>
-                                {chainData.status}
-                            </span>
+                            <div style={{ display: 'flex', gap: '0.5rem' }}>
+                                {/* Expiry Check */}
+                                {new Date(data.expiryDate) < new Date() && (
+                                    <span className="badge badge-error">EXPIRED</span>
+                                )}
+                                {/* Status Badge */}
+                                <span className={chainData.status === 'ISSUED' ? 'badge badge-success' : 'badge badge-error'}>
+                                    {chainData.status === 'ISSUED' ? 'ACTIVE' : 'USED'}
+                                </span>
+                            </div>
                         </div>
 
                         <div style={{ display: 'grid', gap: '0.5rem', color: 'var(--text-main)' }}>

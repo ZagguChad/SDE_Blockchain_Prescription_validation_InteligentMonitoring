@@ -5,7 +5,7 @@ const PrescriptionLog = require('../models/PrescriptionLog');
 // Store Prescription Metadata (Called by Frontend after Blockchain Tx)
 router.post('/', async (req, res) => {
     try {
-        const { blockchainId, doctorAddress, patientName, patientAge, diagnosis, allergies, medicines, notes } = req.body;
+        const { blockchainId, doctorAddress, patientName, patientAge, diagnosis, allergies, medicines, notes, expiryDate } = req.body;
 
         // Use upsert to handle cases where blockchain resets but DB persists
         // This updates the existing record if blockchainId exists, or creates a new one
@@ -20,6 +20,8 @@ router.post('/', async (req, res) => {
                 allergies,
                 medicines,
                 notes,
+                expiryDate,
+                status: 'ACTIVE', // Default to ACTIVE when issued/re-issued
                 issuedAt: new Date() // Update timestamp on overwrite
             },
             { upsert: true, new: true, setDefaultsOnInsert: true }

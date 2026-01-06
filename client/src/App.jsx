@@ -3,6 +3,7 @@ import { useState, useEffect } from 'react';
 import './App.css';
 import DoctorDashboard from './pages/DoctorDashboard';
 import PharmacyDashboard from './pages/PharmacyDashboard';
+import MedicineHistory from './pages/MedicineHistory';
 
 function Landing() {
   return (
@@ -52,6 +53,7 @@ function Navbar({ account, connectWallet, setupNetwork }) {
             <>
               <Link to="/doctor" className="btn btn-secondary">Doctor</Link>
               <Link to="/pharmacy" className="btn btn-secondary">Pharmacy</Link>
+              <Link to="/history" className="btn btn-secondary">History</Link>
             </>
           )}
         </div>
@@ -134,6 +136,7 @@ function App() {
         <Route path="/" element={<Landing />} />
         <Route path="/doctor" element={<DoctorDashboard account={account} />} />
         <Route path="/pharmacy" element={<PharmacyDashboard account={account} />} />
+        <Route path="/history" element={<MedicineHistory />} />
       </Routes>
     </Router>
   );

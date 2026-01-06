@@ -20,6 +20,12 @@ async function main() {
     await tx.wait();
     console.log("Deployer registered as Doctor.");
 
+    // AUTOMATION: Register deployer as PHARMACY for testing/dispensing
+    console.log("Registering deployer as a Pharmacy...");
+    const tx2 = await registry.registerPharmacy(deployer.address);
+    await tx2.wait();
+    console.log("Deployer registered as Pharmacy.");
+
     // SAVE ARTIFACTS
     const artifactPath = path.join(__dirname, "../../client/src/contractInfo.json");
     const artifactData = {

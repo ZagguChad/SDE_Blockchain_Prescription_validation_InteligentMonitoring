@@ -1,7 +1,7 @@
 import { useState } from 'react';
 import { ethers } from 'ethers';
 import axios from 'axios';
-import VoiceAssistant from '../components/VoiceAssistant';
+
 
 import contractInfo from '../contractInfo.json';
 
@@ -25,8 +25,6 @@ const DoctorDashboard = ({ account }) => {
     const [showModal, setShowModal] = useState(false);
     const [txHexData, setTxHexData] = useState('');
 
-    const [fullTranscript, setFullTranscript] = useState('');
-
 
     const handleChange = (e) => setFormData({ ...formData, [e.target.name]: e.target.value });
 
@@ -49,51 +47,7 @@ const DoctorDashboard = ({ account }) => {
         setFormData({ ...formData, medicines: newMedicines });
     };
 
-    // NLP Parsing Logic (LLM Powered)
-    const handleVoiceTranscript = (finalChunk, interimChunk) => {
-        // Accumulate final text
-        if (finalChunk) {
-            setFullTranscript(prev => {
-                const newText = prev + finalChunk;
-                return newText;
-            });
-        }
-
-        // Feedback loops
-        if (interimChunk) {
-            setStatus(`Listening: ${interimChunk}`);
-        }
-    };
-
-    const processWithAI = async (text) => {
-        if (!text || text.length < 5) return;
-
-        setStatus('AI Analysing...');
-        setStatusType('info');
-
-        try {
-            const res = await axios.post('http://localhost:5000/api/parse-prescription', { transcript: text });
-            if (res.data.success) {
-                const aiData = res.data.data;
-                console.log("AI Data:", aiData);
-
-                setFormData(prev => ({
-                    ...prev,
-                    patientName: aiData.patientName || prev.patientName,
-                    age: aiData.age || prev.age,
-                    // Note: AI Fill for multi-medicine is complex, keeping simple for now or mapping first item
-                    medicines: aiData.medicines ? aiData.medicines : (aiData.medicine ? [{ name: aiData.medicine, quantity: aiData.quantity || 1, dosage: '', instructions: '' }] : prev.medicines),
-                    notes: aiData.notes || prev.notes
-                }));
-
-                setStatus('AI Updated Form');
-                setStatusType('success');
-            }
-        } catch (err) {
-            console.error("AI Error:", err);
-            // Non-blocking error, just log
-        }
-    };
+    // Medicine Array Handlers
 
     const issuePrescription = async (e) => {
         e.preventDefault();
@@ -123,18 +77,24 @@ const DoctorDashboard = ({ account }) => {
             // Calculate total quantity for contract (metric only)
             const totalQty = formData.medicines.reduce((acc, m) => acc + Number(m.quantity), 0);
 
+            // Expiry Logic: Default 30 days for now (Can be made dynamic)
+            const expiryDays = 30;
+            const expiryDate = new Date();
+            expiryDate.setDate(expiryDate.getDate() + expiryDays);
+            const expiryTimestamp = Math.floor(expiryDate.getTime() / 1000); // Unix timestamp for Contract
+
             // 2. Interact with Blockchain
             const provider = new ethers.BrowserProvider(window.ethereum);
             const signer = await provider.getSigner();
             const contract = new ethers.Contract(CONTRACT_ADDRESS, ABI, signer);
 
             // Log the Raw Hex Data for verification
-            const txData = await contract.issuePrescription.populateTransaction(prescriptionIdBytes, patientHash, medHash, totalQty);
+            const txData = await contract.issuePrescription.populateTransaction(prescriptionIdBytes, patientHash, medHash, totalQty, expiryTimestamp);
             console.log("🔐 Transaction Data (Hex/Encrypted):", txData.data);
             setTxHexData(txData.data);
             setStatus(`Sending Data...`);
 
-            const tx = await contract.issuePrescription(prescriptionIdBytes, patientHash, medHash, totalQty);
+            const tx = await contract.issuePrescription(prescriptionIdBytes, patientHash, medHash, totalQty, expiryTimestamp);
             setStatus('Transaction sent... waiting for confirmation');
 
             const receipt = await tx.wait();
@@ -173,7 +133,8 @@ const DoctorDashboard = ({ account }) => {
                 diagnosis: formData.diagnosis,
                 allergies: formData.allergies,
                 medicines: formData.medicines,
-                notes: formData.notes
+                notes: formData.notes,
+                expiryDate: expiryDate // Save actual Date object
             });
 
             // Set for display
@@ -182,7 +143,8 @@ const DoctorDashboard = ({ account }) => {
                 patientName: formData.patientName,
                 age: formData.age,
                 medicines: formData.medicines,
-                notes: formData.notes
+                notes: formData.notes,
+                expiryDate: expiryDate
             });
 
             setStatus(`Success! Prescription #${pId} Issued.`);
@@ -210,39 +172,7 @@ const DoctorDashboard = ({ account }) => {
             <h2 className="center-text">Doctor Dashboard</h2>
 
             <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', marginBottom: '2rem' }}>
-                <VoiceAssistant
-                    onTranscript={handleVoiceTranscript}
-                    onStatusChange={(s) => {
-                        if (s.includes('Error')) setStatusType('error');
-                        else setStatusType('info');
-                        setStatus(s);
-                    }}
-                />
-
-                {/* Transcript Display & Manual Trigger */}
-                <div style={{ width: '100%', maxWidth: '600px', marginTop: '1rem', display: 'flex', gap: '0.5rem' }}>
-                    <textarea
-                        className="input-field"
-                        rows="2"
-                        placeholder="Live transcript will appear here... (or type manually)"
-                        value={fullTranscript}
-                        onChange={(e) => setFullTranscript(e.target.value)}
-                        style={{ fontSize: '0.9rem', flex: 1 }}
-                    />
-                    <button
-                        type="button"
-                        className="btn btn-secondary"
-                        onClick={() => processWithAI(fullTranscript)}
-                        disabled={loading || !fullTranscript}
-                        style={{ whiteSpace: 'nowrap' }}
-                    >
-                        ✨ AI Fill
-                    </button>
-                </div>
-                <p className="center-text" style={{ fontSize: '0.8rem', color: 'var(--text-muted)', marginTop: '0.5rem' }}>
-                    Tip: Speak naturally, then click "✨ AI Fill". <br />
-                    <em>"Patient John Doe Age 40 Medicine Aspirin Quantity 10"</em>
-                </p>
+                {/* Voice Assistant Removed */}
             </div>
 
             <div className="card" style={{ maxWidth: '600px', margin: '0 auto' }}>
