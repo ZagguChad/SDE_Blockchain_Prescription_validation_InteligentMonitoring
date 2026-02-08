@@ -96,7 +96,11 @@ router.post('/', protect, authorize('doctor'), async (req, res) => {
             }))
         };
 
-        // 3. Save to DB
+        // 3. Generate Patient Username (Canonical, stored once)
+        const { generatePatientUsername } = require('../utils/username');
+        const patientUsername = generatePatientUsername(patientName, blockchainId);
+
+        // 4. Save to DB
         // Use upsert to handle cases where blockchain resets but DB persists
         const savedLog = await PrescriptionLog.findOneAndUpdate(
             { blockchainId },
@@ -104,6 +108,7 @@ router.post('/', protect, authorize('doctor'), async (req, res) => {
                 blockchainId,
                 doctorAddress,
                 patientName: encryptedData.patientName,
+                patientUsername, // Store canonical username
                 patientAge, // Age usually not strictly sensitive without name
                 diagnosis: encryptedData.diagnosis,
                 allergies: encryptedData.allergies,
@@ -119,48 +124,15 @@ router.post('/', protect, authorize('doctor'), async (req, res) => {
             { upsert: true, new: true, setDefaultsOnInsert: true }
         );
 
-        // 4. Create Temporary Patient Access (If doesn't exist)
-        // 4. Create Temporary Patient Access (If doesn't exist)
-        const userExists = await User.findOne({ linkedPrescriptionId: blockchainId });
-        if (!userExists) {
-            // Generate Credentials
-            // Username: RX-{First 6 of ID}
-            // Password: The full Blockchain ID
-            const username = `RX-${blockchainId.slice(0, 6)}`;
-            const password = blockchainId; // The ID is the password
-
-            const salt = await bcrypt.genSalt(10);
-            const hashedPassword = await bcrypt.hash(password, salt);
-
-            try {
-                await User.create({
-                    name: patientName,
-                    username: username,
-                    password: hashedPassword,
-                    role: 'patient',
-                    isTemporary: true,
-                    linkedPrescriptionId: blockchainId,
-                    active: true
-                });
-                // console.log(`Created Patient Access: ${username} / ${password}`);
-            } catch (createError) {
-                // If user creation fails (e.g. somehow duplicate email despite sparse index), 
-                // we should log it but decided if we want to fail the whole request.
-                // Since "Patient Auto-Access" is a requirement, we probably should fail or return a warning.
-                // But we don't want a generic 500.
-                console.error("⚠️ Failed to create patient access user:", createError.message);
-
-                // If it's a duplicate key error, meaningful message
-                if (createError.code === 11000) {
-                    // We can try to proceed if the prescription log is saved, but the patient won't have access.
-                    // Better to let the caller know.
-                    throw new Error(`Patient access creation failed: Duplicate data (probably email). ${createError.message}`);
-                }
-                throw createError;
+        // 5. Return credentials for printing on prescription
+        res.status(201).json({
+            success: true,
+            data: savedLog,
+            patientCredentials: {
+                username: patientUsername,
+                password: blockchainId // Prescription ID is the password
             }
-        }
-
-        res.status(201).json({ success: true, data: savedLog });
+        });
     } catch (error) {
         console.error("❌ Prescription Save Error:", error);
         res.status(500).json({ success: false, error: error.message });
@@ -436,13 +408,9 @@ router.post('/complete-dispense', protect, authorize('pharmacy'), async (req, re
         log.totalCost = totalCost;
         await log.save();
 
-        // 6. Invalidate Patient Access
-        await User.findOneAndUpdate(
-            { linkedPrescriptionId: blockchainId },
-            { active: false }
-        );
+        // Note: Patient sessions are automatically invalidated by status check in /api/patient/access
 
-        res.json({ success: true, message: 'Prescription marked as DISPENSED. Access revoked. Invoice Saved.' });
+        res.json({ success: true, message: 'Prescription marked as DISPENSED. Invoice Saved.' });
 
     } catch (error) {
         res.status(500).json({ success: false, error: error.message });

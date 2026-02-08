@@ -10,19 +10,15 @@ function PatientPrescriptionView() {
 
     useEffect(() => {
         const fetchPrescription = async () => {
-            if (!user || user.role !== 'patient' || !user.linkedPrescriptionId) {
+            if (!user || user.role !== 'patient' || !user.prescriptionId) {
                 setError('Invalid Patient Access');
                 setLoading(false);
                 return;
             }
 
             try {
-                // Fetch prescription by the ID linked to the user account
-                // Using the public ID endpoint (or we could make a specific 'me' endpoint, but GET /:id is fine if authenticated)
-                // However, GET /:id is not protected effectively in existing router (it's public?). 
-                // Let's check router... GET /:id in prescriptions.js line 102 is PUBLIC. 
-                // But we are logged in, so it's fine.
-                const res = await axios.get(`http://localhost:5000/api/prescriptions/${user.linkedPrescriptionId}`);
+                // Fetch prescription using the new patient-specific endpoint
+                const res = await axios.get(`http://localhost:5000/api/patient/prescription/${user.prescriptionId}`);
                 if (res.data.success) {
                     setPrescription(res.data.data);
                 } else {
@@ -30,7 +26,11 @@ function PatientPrescriptionView() {
                 }
             } catch (err) {
                 console.error(err);
-                setError('Failed to load prescription details.');
+                if (err.response?.status === 403) {
+                    setError('This prescription has been dispensed or is no longer accessible.');
+                } else {
+                    setError('Failed to load prescription details.');
+                }
             } finally {
                 setLoading(false);
             }

@@ -123,7 +123,7 @@ const DoctorDashboard = ({ account }) => {
             setStatus(`On-chain success! Issued ID: ${pId}. Saving metadata...`);
 
             // 3. Save Metadata to Backend
-            await axios.post('http://localhost:5000/api/prescriptions', {
+            const backendRes = await axios.post('http://localhost:5000/api/prescriptions', {
                 blockchainId: pId,
                 doctorAddress: account,
                 patientName: formData.patientName,
@@ -137,10 +137,13 @@ const DoctorDashboard = ({ account }) => {
                 patientHash: patientHash
             });
 
+            const { patientCredentials } = backendRes.data;
+
             // Set for display
             setLastIssuedPrescription({
                 blockchainId: pId,
                 patientName: formData.patientName,
+                patientUsername: patientCredentials.username, // Store for display/PDF
                 age: formData.age,
                 medicines: formData.medicines,
                 notes: formData.notes,
@@ -178,6 +181,12 @@ const DoctorDashboard = ({ account }) => {
         doc.text(`Name: ${lastIssuedPrescription.patientName}`, 20, 62);
         doc.text(`Age: ${lastIssuedPrescription.age}`, 20, 67);
 
+        // Print Credentials
+        doc.setFontSize(11);
+        doc.setTextColor(0, 0, 255); // Blue for visibility
+        doc.text(`Login Username: ${lastIssuedPrescription.patientUsername}`, 15, 75);
+        doc.setTextColor(0, 0, 0); // Reset to black
+
         doc.setFontSize(12);
         doc.text("Medicines:", 15, 80);
 
@@ -200,7 +209,7 @@ const DoctorDashboard = ({ account }) => {
     const copyToClipboard = () => {
         if (!lastIssuedPrescription) return;
         const meds = lastIssuedPrescription.medicines.map(m => `- ${m.name} (${m.dosage}, Qty: ${m.quantity})`).join('\n');
-        const text = `Prescription #${lastIssuedPrescription.blockchainId}\nPatient: ${lastIssuedPrescription.patientName} (Age: ${lastIssuedPrescription.age})\n\nMedicines:\n${meds}\n\nNotes: ${lastIssuedPrescription.notes}`;
+        const text = `Prescription #${lastIssuedPrescription.blockchainId}\nPatient: ${lastIssuedPrescription.patientName} (Age: ${lastIssuedPrescription.age})\nLogin Username: ${lastIssuedPrescription.patientUsername}\n\nMedicines:\n${meds}\n\nNotes: ${lastIssuedPrescription.notes}`;
         navigator.clipboard.writeText(text);
         alert("Prescription copied to clipboard!");
     };
@@ -365,6 +374,8 @@ const DoctorDashboard = ({ account }) => {
                             <div style={{ flex: 2, display: 'grid', gap: '0.8rem', fontSize: '0.95rem' }}>
                                 <p><strong>ID:</strong> <span style={{ fontSize: '1.2rem', color: 'var(--accent-color)' }}>#{lastIssuedPrescription.blockchainId}</span></p>
                                 <p><strong>Patient:</strong> {lastIssuedPrescription.patientName} ({lastIssuedPrescription.age} yrs)</p>
+                                <p><strong>Login Username:</strong> <code style={{ background: '#eee', padding: '2px 5px', borderRadius: '4px' }}>{lastIssuedPrescription.patientUsername}</code></p>
+
                                 <div>
                                     <strong>Medicines:</strong>
                                     <ul style={{ margin: '0.5rem 0 0 1.5rem', padding: 0 }}>

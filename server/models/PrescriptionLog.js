@@ -4,6 +4,7 @@ const PrescriptionSchema = new mongoose.Schema({
     blockchainId: { type: String, required: true, unique: true },
     doctorAddress: { type: String, required: true },
     patientName: { type: String }, // Encrypted
+    patientUsername: { type: String, required: true }, // Generated once: normalize(name) + "-" + prescriptionId
     patientAge: { type: Number },
     diagnosis: { type: String }, // Encrypted
     allergies: { type: String }, // Encrypted

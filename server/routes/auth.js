@@ -67,15 +67,15 @@ router.post('/signup', async (req, res) => {
 // @desc    Auth user & get token
 // @access  Public
 router.post('/login', async (req, res) => {
-    const { email, password, username } = req.body;
+    const { email, password } = req.body;
 
     try {
-        // Check for user by email OR username
+        // Check for user by email only (username removed - patients use /api/patient/access)
         let user;
         if (email) {
             user = await User.findOne({ email });
-        } else if (username) {
-            user = await User.findOne({ username });
+        } else {
+            return res.status(400).json({ message: 'Email is required' });
         }
 
         if (!user) {
@@ -86,11 +86,6 @@ router.post('/login', async (req, res) => {
         const isMatch = await bcrypt.compare(password, user.password);
         if (!isMatch) {
             return res.status(400).json({ message: 'Invalid credentials' });
-        }
-
-        // Check if user account is active (Important for Patients)
-        if (user.active === false) {
-            return res.status(403).json({ message: 'This account has been deactivated (Prescription Dispensed).' });
         }
 
         // Create Token
@@ -104,9 +99,7 @@ router.post('/login', async (req, res) => {
                 id: user._id,
                 name: user.name,
                 email: user.email,
-                username: user.username,
-                role: user.role,
-                linkedPrescriptionId: user.linkedPrescriptionId // Send this to frontend for routing
+                role: user.role
             }
         });
 

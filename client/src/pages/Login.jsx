@@ -57,7 +57,7 @@ function Login() {
             </form>
             <div className="card" style={{ marginTop: 'var(--space-md)', background: 'var(--surface-color)', border: '1px solid var(--border-color)' }}>
                 <p className="text-sm">
-                    <strong>Patients:</strong> Use your <code>RX-ID</code> (e.g. RX-A1B2C3) as Username and <code>Prescription ID</code> as Password.
+                    <strong>Patients:</strong> Use the <strong>exact username</strong> printed on your prescription (e.g. john-doe-A1B2C3).
                 </p>
                 <p className="text-sm text-muted" style={{ marginTop: '5px' }}>
                     *(These are on your printed prescription)*

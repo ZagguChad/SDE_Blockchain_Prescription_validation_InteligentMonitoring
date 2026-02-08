@@ -15,6 +15,7 @@ app.use('/api/prescriptions', prescriptionRoutes);
 app.use('/api/analytics', analyticsRoutes);
 app.use('/api/inventory', require('./routes/inventory'));
 app.use('/api/auth', require('./routes/auth'));
+app.use('/api/patient', require('./routes/patient'));
 
 const startExpiryJob = require('./cron/expiryJob');
 const startBlockchainListener = require('./services/blockchainListener');
