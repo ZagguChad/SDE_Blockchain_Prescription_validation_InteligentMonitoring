@@ -26,18 +26,20 @@ const MedicineHistory = () => {
     if (error) return <div className="container center-text mt-4 error-text">Error: {error}</div>;
 
     return (
-        <div className="container animate-fade">
-            <h2 className="center-text">Medicine Analytics Dashboard</h2>
-            <p className="center-text" style={{ color: 'var(--text-muted)' }}>
+        <div className="page-container animate-fade">
+            <h2 className="text-center" style={{ margin: 'var(--space-xl) 0' }}>Medicine Analytics Dashboard</h2>
+            <p className="text-center text-muted" style={{ marginBottom: 'var(--space-xl)' }}>
                 Intelligent monitoring of dispensing patterns and anomalies.
             </p>
 
-            <div className="grid-responsive mt-4">
+            <div className="grid-layout">
                 {stats.length === 0 ? (
-                    <p className="center-text">No data available.</p>
+                    <div className="card col-span-12 text-center">
+                        <p className="text-muted">No data available yet.</p>
+                    </div>
                 ) : (
                     stats.map((item, index) => (
-                        <div key={index} className="card" style={{
+                        <div key={index} className="card col-span-6" style={{
                             borderLeft: item.isHighAlert ? '4px solid #ef4444' : '4px solid var(--success)',
                             position: 'relative',
                             overflow: 'hidden'
@@ -45,40 +47,36 @@ const MedicineHistory = () => {
                             {/* Anomaly Badge */}
                             {item.isHighAlert && (
                                 <div style={{
-                                    position: 'absolute',
-                                    top: 0,
-                                    right: 0,
-                                    background: '#ef4444',
-                                    color: 'white',
-                                    padding: '0.25rem 0.75rem',
-                                    fontSize: '0.75rem',
-                                    borderBottomLeftRadius: '8px'
+                                    position: 'absolute', top: 0, right: 0,
+                                    background: '#ef4444', color: 'white',
+                                    padding: '0.25rem 0.75rem', fontSize: '0.75rem',
+                                    borderBottomLeftRadius: '8px', fontWeight: 'bold'
                                 }}>
-                                    HIGH USAGE ALERT
+                                    HIGH USAGE
                                 </div>
                             )}
 
-                            <h3>{item.name}</h3>
-                            <div className="stats-grid" style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '0.5rem', marginTop: '1rem' }}>
-                                <div>
-                                    <small style={{ color: 'var(--text-muted)' }}>Total Dispensed</small>
-                                    <div style={{ fontSize: '1.5rem', fontWeight: 'bold' }}>{item.count}</div>
+                            <h3 style={{ marginBottom: 'var(--space-md)' }}>{item.name}</h3>
+
+                            <div className="flex gap-md" style={{ marginBottom: 'var(--space-md)' }}>
+                                <div style={{ background: 'rgba(0,0,0,0.2)', padding: 'var(--space-sm)', borderRadius: '4px', flex: 1 }}>
+                                    <small className="text-muted block">Dispensed</small>
+                                    <span className="text-xl">{item.count}</span>
                                 </div>
-                                <div>
-                                    <small style={{ color: 'var(--text-muted)' }}>Total Quantity</small>
-                                    <div style={{ fontSize: '1.5rem', fontWeight: 'bold' }}>{item.totalQuantity}</div>
+                                <div style={{ background: 'rgba(0,0,0,0.2)', padding: 'var(--space-sm)', borderRadius: '4px', flex: 1 }}>
+                                    <small className="text-muted block">Total Qty</small>
+                                    <span className="text-xl">{item.totalQuantity}</span>
                                 </div>
                             </div>
 
-                            <div className="mt-2">
-                                <small style={{ color: 'var(--text-muted)' }}>Common Dosages:</small>
-                                <div style={{ display: 'flex', gap: '0.5rem', flexWrap: 'wrap', marginTop: '0.25rem' }}>
+                            <div style={{ marginBottom: 'var(--space-md)' }}>
+                                <small className="text-muted block" style={{ marginBottom: 'var(--space-xs)' }}>Common Dosages</small>
+                                <div className="flex flex-wrap gap-sm">
                                     {item.dosages.map((d, i) => (
                                         <span key={i} style={{
-                                            background: 'rgba(255,255,255,0.1)',
-                                            padding: '2px 8px',
-                                            borderRadius: '4px',
-                                            fontSize: '0.85rem'
+                                            background: 'rgba(255,255,255,0.05)',
+                                            border: '1px solid var(--glass-border)',
+                                            padding: '2px 8px', borderRadius: '4px', fontSize: '0.85rem'
                                         }}>
                                             {d}
                                         </span>
@@ -86,8 +84,8 @@ const MedicineHistory = () => {
                                 </div>
                             </div>
 
-                            <div className="mt-2" style={{ fontSize: '0.85rem', color: 'var(--text-muted)' }}>
-                                Last Dispensed: {new Date(item.lastDispensed).toLocaleDateString()}
+                            <div className="text-sm text-right text-muted" style={{ marginTop: 'auto', paddingTop: 'var(--space-sm)', borderTop: '1px solid var(--glass-border)' }}>
+                                Last: {new Date(item.lastDispensed).toLocaleDateString()}
                             </div>
                         </div>
                     ))

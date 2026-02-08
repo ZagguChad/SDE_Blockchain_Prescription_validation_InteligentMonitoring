@@ -1,75 +1,18 @@
-import { BrowserRouter as Router, Routes, Route, Link, useLocation } from 'react-router-dom';
+import { BrowserRouter as Router, Routes, Route } from 'react-router-dom';
 import { useState, useEffect } from 'react';
-import './App.css';
+import { AuthProvider } from './context/AuthContext';
+import ProtectedRoute from './components/ProtectedRoute';
+import Navbar from './components/Navbar';
+
+// Pages
+import Landing from './pages/Landing';
+import Login from './pages/Login';
+import Signup from './pages/Signup';
 import DoctorDashboard from './pages/DoctorDashboard';
 import PharmacyDashboard from './pages/PharmacyDashboard';
 import MedicineHistory from './pages/MedicineHistory';
-
-function Landing() {
-  return (
-    <div className="container center-text animate-fade" style={{ marginTop: '5rem' }}>
-      <h1>Secure Digital Prescriptions</h1>
-      <p style={{ color: 'var(--text-muted)', fontSize: '1.25rem', maxWidth: '600px', margin: '1rem auto' }}>
-        Blockchain-powered authenticity for modern healthcare. Issue and dispense prescriptions with confidence.
-      </p>
-
-      <div style={{ display: 'flex', gap: '2rem', justifyContent: 'center', marginTop: '4rem', flexWrap: 'wrap' }}>
-        <Link to="/doctor" className="card" style={{ textDecoration: 'none', width: '250px', textAlign: 'left' }}>
-          <div style={{ fontSize: '3rem', marginBottom: '1rem' }}>👨‍⚕️</div>
-          <h2>Doctor</h2>
-          <p style={{ color: 'var(--text-muted)' }}>Issue tamper-proof prescriptions directly to the blockchain.</p>
-        </Link>
-        <Link to="/pharmacy" className="card" style={{ textDecoration: 'none', width: '250px', textAlign: 'left' }}>
-          <div style={{ fontSize: '3rem', marginBottom: '1rem' }}>💊</div>
-          <h2>Pharmacy</h2>
-          <p style={{ color: 'var(--text-muted)' }}>Verify authenticity and dispense medicine securely.</p>
-        </Link>
-      </div>
-    </div>
-  );
-}
-
-function Navbar({ account, connectWallet, setupNetwork }) {
-  const location = useLocation();
-
-  return (
-    <nav style={{
-      position: 'sticky', top: 0, zIndex: 50,
-      background: 'rgba(15, 23, 42, 0.8)', backdropFilter: 'blur(10px)',
-      borderBottom: '1px solid var(--glass-border)',
-      padding: '1rem 0'
-    }}>
-      <div className="container" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '0 2rem' }}>
-        <Link to="/" style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', textDecoration: 'none' }}>
-          <img src="/logo.png" alt="BlockRx Logo" style={{ height: '40px' }} />
-          <span style={{ fontSize: '1.5rem', fontWeight: '800', background: 'linear-gradient(to right, var(--primary), var(--secondary))', WebkitBackgroundClip: 'text', WebkitTextFillColor: 'transparent' }}>
-            BlockRx
-          </span>
-        </Link>
-
-        <div style={{ display: 'flex', gap: '1rem' }}>
-          {/* Only show nav links if not on landing */}
-          {location.pathname !== '/' && (
-            <>
-              <Link to="/doctor" className="btn btn-secondary">Doctor</Link>
-              <Link to="/pharmacy" className="btn btn-secondary">Pharmacy</Link>
-              <Link to="/history" className="btn btn-secondary">History</Link>
-            </>
-          )}
-        </div>
-
-        <div style={{ display: 'flex', gap: '1rem' }}>
-          <button className="btn btn-secondary" onClick={setupNetwork} title="Setup Local Network">
-            ⚙️ Setup
-          </button>
-          <button className="btn" onClick={connectWallet}>
-            {account ? `🟢 ${account.slice(0, 6)}...` : 'Connect Wallet'}
-          </button>
-        </div>
-      </div>
-    </nav>
-  );
-}
+import AdminDashboard from './pages/AdminDashboard';
+import PatientPrescriptionView from './pages/PatientPrescriptionView'; // Import Patient View
 
 function App() {
   const [account, setAccount] = useState(null);
@@ -126,19 +69,44 @@ function App() {
       window.ethereum.on('chainChanged', () => {
         window.location.reload();
       });
+      // Auto connect if authorized?
+      // window.ethereum.request({ method: 'eth_accounts' }).then(accs => { if(accs.length) setAccount(accs[0]) });
     }
   }, []);
 
   return (
-    <Router>
-      <Navbar account={account} connectWallet={connectWallet} setupNetwork={setupNetwork} />
-      <Routes>
-        <Route path="/" element={<Landing />} />
-        <Route path="/doctor" element={<DoctorDashboard account={account} />} />
-        <Route path="/pharmacy" element={<PharmacyDashboard account={account} />} />
-        <Route path="/history" element={<MedicineHistory />} />
-      </Routes>
-    </Router>
+    <AuthProvider>
+      <Router>
+        <Navbar account={account} connectWallet={connectWallet} setupNetwork={setupNetwork} />
+        <Routes>
+          {/* Public Routes */}
+          <Route path="/" element={<Landing />} />
+          <Route path="/signin" element={<Login />} />
+          <Route path="/signup" element={<Signup />} />
+          <Route path="/history" element={<MedicineHistory />} /> {/* Analytics public? or move to admin */}
+
+          {/* Protected Routes */}
+          <Route element={<ProtectedRoute allowedRoles={['doctor']} />}>
+            <Route path="/doctor/*" element={<DoctorDashboard account={account} />} />
+          </Route>
+
+          <Route element={<ProtectedRoute allowedRoles={['pharmacy']} />}>
+            <Route path="/pharmacy/*" element={<PharmacyDashboard account={account} />} />
+          </Route>
+
+          <Route element={<ProtectedRoute allowedRoles={['admin']} />}>
+            {/* AdminDashboard was imported. Let's make sure it exists or just use MedicineHistory as placeholder if missing */}
+            <Route path="/admin/*" element={<AdminDashboard />} />
+          </Route>
+
+          <Route element={<ProtectedRoute allowedRoles={['patient']} />}>
+            {/* Patient Dashboard - Restricted to Single Prescription View */}
+            <Route path="/patient/*" element={<PatientPrescriptionView />} />
+          </Route>
+
+        </Routes>
+      </Router>
+    </AuthProvider>
   );
 }
 

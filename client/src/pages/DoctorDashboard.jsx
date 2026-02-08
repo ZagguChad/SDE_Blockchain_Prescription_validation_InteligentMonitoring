@@ -1,8 +1,8 @@
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { ethers } from 'ethers';
 import axios from 'axios';
-
-
+import { QRCodeCanvas } from 'qrcode.react';
+import jsPDF from 'jspdf';
 import contractInfo from '../contractInfo.json';
 
 const CONTRACT_ADDRESS = contractInfo.address;
@@ -24,9 +24,20 @@ const DoctorDashboard = ({ account }) => {
     const [lastIssuedPrescription, setLastIssuedPrescription] = useState(null);
     const [showModal, setShowModal] = useState(false);
     const [txHexData, setTxHexData] = useState('');
-
+    const [stats, setStats] = useState({ totalIssued: 0, dispensed: 0, expired: 0 });
 
     const handleChange = (e) => setFormData({ ...formData, [e.target.name]: e.target.value });
+
+    // Fetch Stats
+    useEffect(() => {
+        if (account) {
+            axios.get(`http://localhost:5000/api/prescriptions/stats/doctor/${account}`)
+                .then(res => {
+                    if (res.data.success) setStats(res.data.stats);
+                })
+                .catch(err => console.error("Stats Fetch Error:", err));
+        }
+    }, [account, lastIssuedPrescription]); // Re-fetch when new prescription issued
 
     // Medicine Array Handlers
     const handleMedicineChange = (index, field, value) => {
@@ -47,8 +58,6 @@ const DoctorDashboard = ({ account }) => {
         setFormData({ ...formData, medicines: newMedicines });
     };
 
-    // Medicine Array Handlers
-
     const issuePrescription = async (e) => {
         e.preventDefault();
         if (!account) return alert("Connect Wallet first!");
@@ -59,42 +68,33 @@ const DoctorDashboard = ({ account }) => {
         try {
             // 1. Hash the data
             const patientHash = ethers.keccak256(ethers.toUtf8Bytes(formData.patientName + formData.age));
-            // Hash the entire medicines array for integrity
             const medHash = ethers.keccak256(ethers.toUtf8Bytes(JSON.stringify(formData.medicines)));
 
-            // UNSAFE BUT READABLE ID GENERATION (Requested by User)
-            // Generate a unique hash based on details + timestamp, then take 6 chars
+            // ID Generation
             const rawUniqueHash = ethers.id(`${formData.patientName}-${formData.age}-${Date.now()}`);
-            const shortId = rawUniqueHash.substring(2, 8).toUpperCase(); // Take 6 chars after 0x
-
-            // For Blockchain: Convert the 6-char string to bytes32
-            // We use encodeBytes32String so it stores the actual text "A1B2C3", not the hash of it
+            const shortId = rawUniqueHash.substring(2, 8).toUpperCase();
             const prescriptionIdBytes = ethers.encodeBytes32String(shortId);
 
-            console.log("🆔 Generated Readable ID:", shortId);
-            console.log("🆔 Bytes32 Format:", prescriptionIdBytes);
-
-            // Calculate total quantity for contract (metric only)
             const totalQty = formData.medicines.reduce((acc, m) => acc + Number(m.quantity), 0);
 
-            // Expiry Logic: Default 30 days for now (Can be made dynamic)
+            // Expiry Logic: Default 30 days
             const expiryDays = 30;
             const expiryDate = new Date();
             expiryDate.setDate(expiryDate.getDate() + expiryDays);
-            const expiryTimestamp = Math.floor(expiryDate.getTime() / 1000); // Unix timestamp for Contract
+            const expiryTimestamp = Math.floor(expiryDate.getTime() / 1000);
+            const maxUsage = 1; // Default to 1 for now, could be dynamic
 
             // 2. Interact with Blockchain
             const provider = new ethers.BrowserProvider(window.ethereum);
             const signer = await provider.getSigner();
             const contract = new ethers.Contract(CONTRACT_ADDRESS, ABI, signer);
 
-            // Log the Raw Hex Data for verification
-            const txData = await contract.issuePrescription.populateTransaction(prescriptionIdBytes, patientHash, medHash, totalQty, expiryTimestamp);
-            console.log("🔐 Transaction Data (Hex/Encrypted):", txData.data);
+            // Populate Tx for UI
+            const txData = await contract.issuePrescription.populateTransaction(prescriptionIdBytes, patientHash, medHash, totalQty, expiryTimestamp, maxUsage);
             setTxHexData(txData.data);
             setStatus(`Sending Data...`);
 
-            const tx = await contract.issuePrescription(prescriptionIdBytes, patientHash, medHash, totalQty, expiryTimestamp);
+            const tx = await contract.issuePrescription(prescriptionIdBytes, patientHash, medHash, totalQty, expiryTimestamp, maxUsage);
             setStatus('Transaction sent... waiting for confirmation');
 
             const receipt = await tx.wait();
@@ -106,11 +106,9 @@ const DoctorDashboard = ({ account }) => {
             for (const log of receipt.logs) {
                 try {
                     const parsed = iface.parseLog(log);
-                    if (parsed && parsed.name === 'PrescriptionIssued') {
-                        // The event returns the bytes32 id. We decode it to show the user the readable 6-char ID.
+                    if (parsed && parsed.name === 'PrescriptionCreated') { // Event name changed
                         const rawBytes = parsed.args[0];
                         pId = ethers.decodeBytes32String(rawBytes);
-                        console.log("✅ Found Event: PrescriptionIssued, ID:", pId);
                         break;
                     }
                 } catch (e) {
@@ -119,7 +117,7 @@ const DoctorDashboard = ({ account }) => {
             }
 
             if (pId === null) {
-                throw new Error("Transaction succeeded but 'PrescriptionIssued' event was not found. Check contract.");
+                throw new Error("Transaction succeeded but 'PrescriptionCreated' event was not found.");
             }
 
             setStatus(`On-chain success! Issued ID: ${pId}. Saving metadata...`);
@@ -134,7 +132,9 @@ const DoctorDashboard = ({ account }) => {
                 allergies: formData.allergies,
                 medicines: formData.medicines,
                 notes: formData.notes,
-                expiryDate: expiryDate // Save actual Date object
+                expiryDate: expiryDate,
+                maxUsage: maxUsage,
+                patientHash: patientHash
             });
 
             // Set for display
@@ -144,7 +144,8 @@ const DoctorDashboard = ({ account }) => {
                 age: formData.age,
                 medicines: formData.medicines,
                 notes: formData.notes,
-                expiryDate: expiryDate
+                expiryDate: expiryDate,
+                timestamp: new Date().toLocaleString()
             });
 
             setStatus(`Success! Prescription #${pId} Issued.`);
@@ -159,6 +160,43 @@ const DoctorDashboard = ({ account }) => {
         setLoading(false);
     };
 
+    const generatePDF = () => {
+        if (!lastIssuedPrescription) return;
+        const doc = new jsPDF();
+
+        doc.setFontSize(20);
+        doc.text("Medical Prescription", 105, 20, null, null, "center");
+
+        doc.setFontSize(10);
+        doc.text(`ID: ${lastIssuedPrescription.blockchainId}`, 15, 35);
+        doc.text(`Date: ${lastIssuedPrescription.timestamp}`, 15, 40);
+        doc.text(`Doctor Hash: ${account.substring(0, 10)}...`, 15, 45);
+
+        doc.setFontSize(12);
+        doc.text("Patient Details:", 15, 55);
+        doc.setFontSize(10);
+        doc.text(`Name: ${lastIssuedPrescription.patientName}`, 20, 62);
+        doc.text(`Age: ${lastIssuedPrescription.age}`, 20, 67);
+
+        doc.setFontSize(12);
+        doc.text("Medicines:", 15, 80);
+
+        let y = 87;
+        lastIssuedPrescription.medicines.forEach((med, i) => {
+            doc.setFontSize(10);
+            const line = `${i + 1}. ${med.name} - ${med.dosage} (Qty: ${med.quantity})`;
+            doc.text(line, 20, y);
+            y += 7;
+        });
+
+        if (lastIssuedPrescription.notes) {
+            y += 5;
+            doc.text(`Notes: ${lastIssuedPrescription.notes}`, 15, y);
+        }
+
+        doc.save(`Prescription_${lastIssuedPrescription.blockchainId}.pdf`);
+    };
+
     const copyToClipboard = () => {
         if (!lastIssuedPrescription) return;
         const meds = lastIssuedPrescription.medicines.map(m => `- ${m.name} (${m.dosage}, Qty: ${m.quantity})`).join('\n');
@@ -168,99 +206,146 @@ const DoctorDashboard = ({ account }) => {
     };
 
     return (
-        <div className="container animate-fade">
-            <h2 className="center-text">Doctor Dashboard</h2>
+        <div className="page-container animate-fade">
+            <h2 className="text-center" style={{ margin: 'var(--space-xl) 0' }}>Doctor Dashboard</h2>
 
-            <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', marginBottom: '2rem' }}>
-                {/* Voice Assistant Removed */}
+            {/* Stats Cards */}
+            <div className="grid-layout" style={{ marginBottom: 'var(--space-lg)' }}>
+                <div className="card" style={{ padding: '1rem', textAlign: 'center' }}>
+                    <h3 style={{ fontSize: '2rem', color: 'var(--primary-color)', margin: '0 0 0.5rem' }}>{stats.totalIssued}</h3>
+                    <span style={{ color: 'var(--text-color)', opacity: 0.7 }}>Total Issued</span>
+                </div>
+                <div className="card" style={{ padding: '1rem', textAlign: 'center' }}>
+                    <h3 style={{ fontSize: '2rem', color: '#4ade80', margin: '0 0 0.5rem' }}>{stats.dispensed}</h3>
+                    <span style={{ color: 'var(--text-color)', opacity: 0.7 }}>Dispensed</span>
+                </div>
+                <div className="card" style={{ padding: '1rem', textAlign: 'center' }}>
+                    <h3 style={{ fontSize: '2rem', color: '#f87171', margin: '0 0 0.5rem' }}>{stats.expired}</h3>
+                    <span style={{ color: 'var(--text-color)', opacity: 0.7 }}>Expired (Unused)</span>
+                </div>
             </div>
 
-            <div className="card" style={{ maxWidth: '600px', margin: '0 auto' }}>
-                <form onSubmit={issuePrescription} style={{ display: 'flex', flexDirection: 'column', gap: '1rem' }}>
+            <form onSubmit={issuePrescription} className="grid-layout">
 
-                    <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '1rem' }}>
-                        <div>
-                            <label style={{ fontSize: '0.9rem', color: 'var(--text-muted)' }}>Patient Name</label>
+                {/* Card 1: Patient Information */}
+                <div className="card col-span-6">
+                    <h3>👤 Patient Details</h3>
+                    <div className="flex gap-md" style={{ flexDirection: 'row' }}>
+                        <div className="input-group" style={{ flex: 2 }}>
+                            <label className="label">Patient Name</label>
                             <input className="input-field" name="patientName" placeholder="John Doe" value={formData.patientName} onChange={handleChange} required />
                         </div>
-                        <div>
-                            <label style={{ fontSize: '0.9rem', color: 'var(--text-muted)' }}>Age</label>
+                        <div className="input-group" style={{ flex: 1 }}>
+                            <label className="label">Age</label>
                             <input className="input-field" name="age" placeholder="45" type="number" value={formData.age} onChange={handleChange} required />
                         </div>
                     </div>
+                </div>
 
-                    <div>
-                        <label style={{ fontSize: '0.9rem', color: 'var(--text-muted)' }}>Diagnosis</label>
+                {/* Card 2: Clinical Data */}
+                <div className="card col-span-6">
+                    <h3>📋 Clinical Data</h3>
+                    <div className="input-group">
+                        <label className="label">Diagnosis</label>
                         <input className="input-field" name="diagnosis" placeholder="Type 2 Diabetes" value={formData.diagnosis} onChange={handleChange} />
                     </div>
-                    <div>
-                        <label style={{ fontSize: '0.9rem', color: 'var(--text-muted)' }}>Allergies</label>
-                        <input className="input-field" name="allergies" placeholder="Penicillin" value={formData.allergies} onChange={handleChange} />
+                    <div className="input-group">
+                        <label className="label">Allergies</label>
+                        <input className="input-field" name="allergies" placeholder="Populate from AI..." value={formData.allergies} onChange={handleChange} />
                     </div>
+                </div>
 
-
-                    <div style={{ border: '1px solid var(--border-color)', padding: '1rem', borderRadius: 'var(--radius-sm)' }}>
-                        <label style={{ fontSize: '0.9rem', color: 'var(--text-muted)', marginBottom: '0.5rem', display: 'block' }}>Medicines</label>
-                        {formData.medicines.map((med, index) => (
-                            <div key={index} style={{ display: 'grid', gridTemplateColumns: '2fr 1fr 1fr auto', gap: '0.5rem', marginBottom: '0.5rem', alignItems: 'center' }}>
-                                <input
-                                    className="input-field"
-                                    placeholder="Medicine Name"
-                                    value={med.name}
-                                    onChange={(e) => handleMedicineChange(index, 'name', e.target.value)}
-                                    required
-                                />
-                                <input
-                                    className="input-field"
-                                    placeholder="Dosage"
-                                    value={med.dosage}
-                                    onChange={(e) => handleMedicineChange(index, 'dosage', e.target.value)}
-                                />
-                                <input
-                                    className="input-field"
-                                    type="number"
-                                    placeholder="Qty"
-                                    value={med.quantity}
-                                    onChange={(e) => handleMedicineChange(index, 'quantity', e.target.value)}
-                                    required
-                                />
-                                {formData.medicines.length > 1 && (
-                                    <button type="button" onClick={() => removeMedicine(index)} style={{ background: 'none', border: 'none', color: 'var(--danger-color)', cursor: 'pointer' }}>
-                                        🗑️
-                                    </button>
-                                )}
-                            </div>
-                        ))}
-                        <button type="button" className="btn btn-secondary" onClick={addMedicine} style={{ fontSize: '0.8rem', padding: '0.2rem 0.5rem' }}>
-                            + Add Another Medicine
+                {/* Card 3: Medicines (Full Width) */}
+                <div className="card col-span-12">
+                    <div className="flex justify-between items-center" style={{ marginBottom: 'var(--space-md)' }}>
+                        <h3>💊 Prescribed Medicines</h3>
+                        <button type="button" className="btn btn-secondary btn-sm" onClick={addMedicine}>
+                            + Add Medicine
                         </button>
                     </div>
 
-                    <div>
-                        <label style={{ fontSize: '0.9rem', color: 'var(--text-muted)' }}>Notes</label>
-                        <textarea className="input-field" name="notes" rows="3" placeholder="Dosage: 500mg twice daily..." value={formData.notes} onChange={handleChange} />
+                    <div className="flex flex-col gap-sm">
+                        {formData.medicines.map((med, index) => (
+                            <div key={index} style={{
+                                border: '1px solid var(--glass-border)',
+                                padding: 'var(--space-md)',
+                                borderRadius: 'var(--radius-sm)',
+                                background: 'rgba(0,0,0,0.1)'
+                            }}>
+                                <div style={{
+                                    display: 'grid',
+                                    gridTemplateColumns: 'repeat(auto-fit, minmax(140px, 1fr))',
+                                    gap: 'var(--space-md)',
+                                    alignItems: 'end'
+                                }}>
+                                    <div className="input-group" style={{ margin: 0 }}>
+                                        {index === 0 && <label className="label">Medicine Name</label>}
+                                        <input
+                                            className="input-field"
+                                            placeholder="Medicine Name"
+                                            value={med.name}
+                                            onChange={(e) => handleMedicineChange(index, 'name', e.target.value)}
+                                            required
+                                        />
+                                    </div>
+                                    <div className="input-group" style={{ margin: 0 }}>
+                                        {index === 0 && <label className="label">Dosage</label>}
+                                        <input
+                                            className="input-field"
+                                            placeholder="Dosage"
+                                            value={med.dosage}
+                                            onChange={(e) => handleMedicineChange(index, 'dosage', e.target.value)}
+                                        />
+                                    </div>
+                                    <div className="flex gap-sm items-center">
+                                        <div className="input-group" style={{ margin: 0, flex: 1 }}>
+                                            {index === 0 && <label className="label">Qty</label>}
+                                            <input
+                                                className="input-field"
+                                                type="number"
+                                                placeholder="Qty"
+                                                value={med.quantity}
+                                                onChange={(e) => handleMedicineChange(index, 'quantity', e.target.value)}
+                                                required
+                                            />
+                                        </div>
+                                        {formData.medicines.length > 1 && (
+                                            <button type="button" onClick={() => removeMedicine(index)}
+                                                style={{
+                                                    background: 'none', border: 'none',
+                                                    color: 'var(--error)', cursor: 'pointer',
+                                                    fontSize: '1.2rem', padding: '0 0.5rem',
+                                                    height: '48px', display: 'flex', alignItems: 'center'
+                                                }}>
+                                                ✕
+                                            </button>
+                                        )}
+                                    </div>
+                                </div>
+                            </div>
+                        ))}
                     </div>
 
-                    <button className="btn" disabled={loading} style={{ marginTop: '1rem' }}>
-                        {loading ? 'Processing...' : 'Issue Prescription'}
-                    </button>
-                </form>
+                    <div className="input-group" style={{ marginTop: 'var(--space-lg)' }}>
+                        <label className="label">Notes</label>
+                        <textarea className="input-field" name="notes" rows="3" placeholder="Additional instructions..." value={formData.notes} onChange={handleChange} />
+                    </div>
 
-                {
-                    status && (
-                        <div className={`mt-4 fade-in`} style={{
-                            padding: '1rem',
-                            borderRadius: 'var(--radius-sm)',
-                            background: statusType === 'success' ? 'rgba(34, 197, 94, 0.15)' : (statusType === 'error' ? 'rgba(239, 68, 68, 0.15)' : 'rgba(56, 189, 248, 0.15)'),
-                            color: statusType === 'success' ? '#4ade80' : (statusType === 'error' ? '#f87171' : '#38bdf8'),
-                            border: `1px solid ${statusType === 'success' ? 'rgba(34, 197, 94, 0.2)' : (statusType === 'error' ? 'rgba(239, 68, 68, 0.2)' : 'rgba(56, 189, 248, 0.2)')}`
-                        }}>
-                            {status}
-                        </div>
-                    )
-                }
+                    <div className="flex justify-end" style={{ marginTop: 'var(--space-md)' }}>
+                        <button className="btn" disabled={loading} style={{ width: '100%', maxWidth: '300px' }}>
+                            {loading ? 'Processing Transaction...' : '🔒 Issue Prescription'}
+                        </button>
+                    </div>
+                </div>
 
-            </div >
+                {/* Status Message */}
+                {status && (
+                    <div className={`col-span-12 card ${statusType === 'success' ? 'badge-success' : statusType === 'error' ? 'badge-error' : ''}`}
+                        style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'center' }}>
+                        {status}
+                    </div>
+                )}
+            </form>
 
             {/* Modal Popup */}
             {showModal && lastIssuedPrescription && (
@@ -269,40 +354,57 @@ const DoctorDashboard = ({ account }) => {
                     background: 'rgba(0,0,0,0.7)', display: 'flex', alignItems: 'center', justifyContent: 'center',
                     zIndex: 1000, backdropFilter: 'blur(5px)'
                 }}>
-                    <div className="card animate-fade" style={{ width: '90%', maxWidth: '600px', background: 'var(--bg-main)', border: '1px solid var(--primary-color)', boxShadow: '0 10px 30px rgba(0,0,0,0.5)' }}>
+                    <div className="card animate-fade" style={{ width: '90%', maxWidth: '700px', background: 'var(--bg-main)', border: '1px solid var(--primary-color)', boxShadow: '0 10px 30px rgba(0,0,0,0.5)' }}>
                         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1.5rem', borderBottom: '1px solid var(--border-color)', paddingBottom: '0.5rem' }}>
                             <h2 style={{ margin: 0, color: 'var(--primary-color)' }}>✅ Prescription Issued</h2>
                             <button onClick={() => setShowModal(false)} style={{ background: 'none', border: 'none', fontSize: '1.5rem', cursor: 'pointer', color: 'var(--text-color)' }}>×</button>
                         </div>
 
-                        <div style={{ display: 'grid', gap: '0.8rem', fontSize: '0.95rem' }}>
-                            <p><strong>ID:</strong> <span style={{ fontSize: '1.2rem', color: 'var(--accent-color)' }}>#{lastIssuedPrescription.blockchainId}</span></p>
-                            <p><strong>Patient:</strong> {lastIssuedPrescription.patientName} ({lastIssuedPrescription.age} yrs)</p>
-                            <div>
-                                <strong>Medicines:</strong>
-                                <ul style={{ margin: '0.5rem 0 0 1.5rem', padding: 0 }}>
-                                    {lastIssuedPrescription.medicines.map((m, i) => (
-                                        <li key={i}>{m.name} - {m.dosage} (Qty: {m.quantity})</li>
-                                    ))}
-                                </ul>
+                        <div style={{ display: 'flex', gap: '2rem', flexDirection: window.innerWidth < 600 ? 'column' : 'row' }}>
+                            {/* Left: Info */}
+                            <div style={{ flex: 2, display: 'grid', gap: '0.8rem', fontSize: '0.95rem' }}>
+                                <p><strong>ID:</strong> <span style={{ fontSize: '1.2rem', color: 'var(--accent-color)' }}>#{lastIssuedPrescription.blockchainId}</span></p>
+                                <p><strong>Patient:</strong> {lastIssuedPrescription.patientName} ({lastIssuedPrescription.age} yrs)</p>
+                                <div>
+                                    <strong>Medicines:</strong>
+                                    <ul style={{ margin: '0.5rem 0 0 1.5rem', padding: 0 }}>
+                                        {lastIssuedPrescription.medicines.map((m, i) => (
+                                            <li key={i}>{m.name} - {m.dosage} (Qty: {m.quantity})</li>
+                                        ))}
+                                    </ul>
+                                </div>
+                                {lastIssuedPrescription.notes && <p><strong>Notes:</strong> {lastIssuedPrescription.notes}</p>}
                             </div>
-                            {lastIssuedPrescription.notes && <p><strong>Notes:</strong> {lastIssuedPrescription.notes}</p>}
+
+                            {/* Right: QR Code */}
+                            <div style={{ flex: 1, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', background: 'white', padding: '1rem', borderRadius: '8px' }}>
+                                <QRCodeCanvas
+                                    value={JSON.stringify({
+                                        id: lastIssuedPrescription.blockchainId,
+                                        url: `http://localhost:5000/api/prescriptions/${lastIssuedPrescription.blockchainId}`
+                                    })}
+                                    size={128}
+                                />
+                                <span style={{ color: 'black', fontSize: '0.8rem', marginTop: '0.5rem', textAlign: 'center' }}>Scan to Verify</span>
+                            </div>
                         </div>
 
-                        {/* Hex Data Display */}
                         {txHexData && (
                             <div style={{ marginTop: '1.5rem', background: '#1e1e1e', padding: '0.8rem', borderRadius: '4px', border: '1px solid #333' }}>
                                 <p style={{ margin: '0 0 0.5rem', fontSize: '0.8rem', color: '#888' }}>🔐 Blockchain Transaction Data (Calldata)</p>
-                                <div style={{ fontSize: '0.7rem', color: '#4ade80', fontFamily: 'monospace', wordBreak: 'break-all', maxHeight: '100px', overflowY: 'auto' }}>
+                                <div style={{ fontSize: '0.7rem', color: '#4ade80', fontFamily: 'monospace', wordBreak: 'break-all', maxHeight: '102px', overflowY: 'auto' }}>
                                     {txHexData}
                                 </div>
                             </div>
                         )}
 
-                        <div style={{ marginTop: '1.5rem', display: 'flex', gap: '1rem', justifyContent: 'flex-end' }}>
+                        <div style={{ marginTop: '1.5rem', display: 'flex', gap: '1rem', justifyContent: 'flex-end', flexWrap: 'wrap' }}>
                             <button className="btn btn-secondary" onClick={() => setShowModal(false)}>Close</button>
+                            <button className="btn" onClick={generatePDF} style={{ background: '#e0f2fe', color: '#0369a1' }}>
+                                ⬇️ Download PDF
+                            </button>
                             <button className="btn" onClick={copyToClipboard} style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
-                                📋 Copy Prescription
+                                📋 Copy Text
                             </button>
                         </div>
                     </div>

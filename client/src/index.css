@@ -1,142 +1,264 @@
 :root {
-  /* Clinical Modern Palette (Teal/Slate) */
-  --bg-dark: #111827;
-  /* Dark Slate */
-  --bg-card: #1f2937;
-  /* Lighter Slate */
-  --primary: #14b8a6;
-  /* Clinical Teal */
-  --primary-hover: #0d9488;
-  --secondary: #2dd4bf;
-  /* Soft Mint */
-  --accent: #38bdf8;
-  /* Sky Blue */
+  /* --- COLOR PALETTE (PRESERVED) --- */
+  --bg-main: #0f172a;
+  --bg-card: #1e293b;
+  --bg-panel: #334155;
 
-  --text-main: #f9fafb;
-  --text-muted: #9ca3af;
+  --primary: #3b82f6;
+  /* Blue 500 */
+  --primary-hover: #2563eb;
+  /* Blue 600 */
+  --secondary: #8b5cf6;
+  /* Violet 500 */
+  --accent: #06b6d4;
+  /* Cyan 500 */
 
-  --glass-bg: rgba(31, 41, 55, 0.7);
-  --glass-border: rgba(20, 184, 166, 0.15);
-  /* Teal Tint */
+  --success: #10b981;
+  --success-bg: rgba(16, 185, 129, 0.1);
+  --warning: #f59e0b;
+  --warning-bg: rgba(245, 158, 11, 0.1);
+  --error: #ef4444;
+  --error-bg: rgba(239, 68, 68, 0.1);
 
-  --radius-sm: 8px;
-  --radius-md: 12px;
-  --radius-lg: 20px;
+  --text-main: #f1f5f9;
+  --text-secondary: #94a3b8;
+  --text-muted: #64748b;
+
+  --glass-bg: rgba(30, 41, 59, 0.7);
+  --glass-border: rgba(148, 163, 184, 0.1);
 
   --shadow-sm: 0 1px 2px 0 rgb(0 0 0 / 0.05);
-  --shadow-md: 0 10px 15px -3px rgb(0 0 0 / 0.1), 0 4px 6px -2px rgb(0 0 0 / 0.1);
-  --shadow-glow: 0 0 20px rgba(20, 184, 166, 0.25);
+  --shadow-md: 0 4px 6px -1px rgba(0, 0, 0, 0.1);
+  --shadow-glow: 0 0 20px rgba(59, 130, 246, 0.15);
+
+  --radius-sm: 8px;
+  --radius-md: 16px;
+  --radius-lg: 24px;
+
+  /* --- SPACING SCALE (NEW) --- */
+  --space-xs: 0.25rem;
+  /* 4px */
+  --space-sm: 0.5rem;
+  /* 8px */
+  --space-md: 1rem;
+  /* 16px */
+  --space-lg: 1.5rem;
+  /* 24px */
+  --space-xl: 2rem;
+  /* 32px */
+  --space-2xl: 3rem;
+  /* 48px */
 
   font-family: 'Inter', system-ui, -apple-system, sans-serif;
-  line-height: 1.6;
+  line-height: 1.5;
 }
 
-/* Reset & Base */
+/* --- RESET & BASE --- */
+* {
+  box-sizing: border-box;
+}
+
 body {
   margin: 0;
   padding: 0;
-  background-color: var(--bg-dark);
+  background-color: var(--bg-main);
   color: var(--text-main);
   min-height: 100vh;
   -webkit-font-smoothing: antialiased;
   background-image:
-    radial-gradient(circle at 15% 15%, rgba(20, 184, 166, 0.08) 0%, transparent 25%),
-    radial-gradient(circle at 85% 85%, rgba(56, 189, 248, 0.08) 0%, transparent 25%);
+    radial-gradient(at 0% 0%, rgba(59, 130, 246, 0.1) 0px, transparent 50%),
+    radial-gradient(at 100% 100%, rgba(139, 92, 246, 0.1) 0px, transparent 50%);
+  background-attachment: fixed;
 }
 
 h1,
 h2,
-h3 {
-  line-height: 1.2;
-  margin-bottom: 0.5em;
-  font-weight: 700;
-  letter-spacing: -0.025em;
+h3,
+h4,
+p {
+  margin: 0;
 }
 
 h1 {
-  font-size: 3rem;
+  font-size: 2.5rem;
+  line-height: 1.2;
+  font-weight: 800;
+  letter-spacing: -0.02em;
   background: linear-gradient(to right, #fff, #94a3b8);
   -webkit-background-clip: text;
   color: transparent;
+  margin-bottom: var(--space-md);
 }
 
 h2 {
-  font-size: 2rem;
+  font-size: 1.75rem;
+  font-weight: 700;
+  letter-spacing: -0.01em;
+  margin-bottom: var(--space-md);
+  color: var(--text-main);
 }
 
 h3 {
-  font-size: 1.5rem;
+  font-size: 1.25rem;
+  font-weight: 600;
+  margin-bottom: var(--space-sm);
+  color: var(--text-main);
 }
 
 a {
-  color: var(--accent);
   text-decoration: none;
-  transition: color 0.2s;
+  color: inherit;
+  transition: opacity 0.2s;
 }
 
-a:hover {
-  color: var(--secondary);
-}
+/* --- LAYOUT SYSTEM --- */
 
-/* Layout & Utilities */
-.container {
-  max-width: 1200px;
+/* Global Container Rule */
+.page-container {
+  width: 100%;
   margin: 0 auto;
-  padding: 2rem;
+  padding: 0 var(--space-md);
+  /* 16px mobile padding */
 }
 
-.center-text {
-  text-align: center;
+@media (min-width: 768px) {
+  .page-container {
+    max-width: 768px;
+    padding: 0 var(--space-xl);
+  }
 }
 
-.mt-2 {
-  margin-top: 1rem;
+@media (min-width: 1024px) {
+  .page-container {
+    max-width: 1200px;
+    padding: 0 var(--space-xl);
+  }
 }
 
-.mt-4 {
-  margin-top: 2rem;
+/* Flex Utilities for Alignment */
+.flex {
+  display: flex;
 }
 
-/* Components */
+.flex-col {
+  flex-direction: column;
+}
+
+.items-center {
+  align-items: center;
+}
+
+.justify-between {
+  justify-content: space-between;
+}
+
+.justify-end {
+  justify-content: flex-end;
+}
+
+.justify-center {
+  justify-content: center;
+}
+
+.gap-sm {
+  gap: var(--space-sm);
+}
+
+.gap-md {
+  gap: var(--space-md);
+}
+
+.gap-lg {
+  gap: var(--space-lg);
+}
+
+/* Strict Grid System */
+.grid-layout {
+  display: grid;
+  grid-template-columns: 1fr;
+  /* Mobile Default */
+  gap: var(--space-lg);
+  margin-top: var(--space-lg);
+}
+
+@media (min-width: 768px) {
+  .grid-layout {
+    grid-template-columns: repeat(2, 1fr);
+    /* Tablet */
+  }
+}
+
+@media (min-width: 1024px) {
+  .grid-layout {
+    grid-template-columns: repeat(12, 1fr);
+    /* Desktop 12-col */
+  }
+}
+
+/* Column Spans (Desktop Only) */
+@media (min-width: 1024px) {
+  .col-span-4 {
+    grid-column: span 4;
+  }
+
+  .col-span-6 {
+    grid-column: span 6;
+  }
+
+  .col-span-8 {
+    grid-column: span 8;
+  }
+
+  .col-span-12 {
+    grid-column: span 12;
+  }
+}
+
+/* --- COMPONENT: CARD --- */
 .card {
   background: var(--glass-bg);
   backdrop-filter: blur(12px);
   border: 1px solid var(--glass-border);
   border-radius: var(--radius-md);
-  padding: 2rem;
+  padding: var(--space-lg);
   box-shadow: var(--shadow-md);
-  transition: transform 0.2s, box-shadow 0.2s;
+  transition: transform 0.2s, border-color 0.2s;
+  display: flex;
+  flex-direction: column;
 }
 
 .card:hover {
-  transform: translateY(-2px);
-  box-shadow: var(--shadow-glow);
-  border-color: rgba(139, 92, 246, 0.3);
+  border-color: rgba(96, 165, 250, 0.3);
 }
 
+/* --- COMPONENT: BUTTONS --- */
 .btn {
-  background: linear-gradient(135deg, var(--primary), var(--secondary));
-  color: white;
-  border: none;
-  padding: 0.8rem 1.5rem;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0 var(--space-lg);
+  height: 48px;
+  /* Touch friendly fixed height */
   border-radius: var(--radius-sm);
+  background: linear-gradient(135deg, var(--primary), var(--primary-hover));
+  color: white;
   font-weight: 600;
+  border: none;
   cursor: pointer;
-  transition: opacity 0.2s, transform 0.1s;
-  font-size: 1rem;
-}
-
-.btn:hover {
-  opacity: 0.9;
-  transform: scale(1.02);
+  transition: filter 0.2s, transform 0.1s;
+  white-space: nowrap;
 }
 
 .btn:active {
-  transform: scale(0.98);
+  transform: translateY(1px);
+}
+
+.btn:hover {
+  filter: brightness(1.1);
 }
 
 .btn:disabled {
-  opacity: 0.5;
+  opacity: 0.6;
   cursor: not-allowed;
   filter: grayscale(1);
 }
@@ -144,40 +266,118 @@ a:hover {
 .btn-secondary {
   background: transparent;
   border: 1px solid var(--glass-border);
-  color: var(--text-muted);
+  color: var(--text-secondary);
 }
 
 .btn-secondary:hover {
   border-color: var(--text-main);
   color: var(--text-main);
-  background: rgba(255, 255, 255, 0.02);
+  background: rgba(255, 255, 255, 0.05);
+}
+
+.btn-sm {
+  height: 36px;
+  padding: 0 var(--space-md);
+  font-size: 0.875rem;
+}
+
+/* --- COMPONENT: INPUTS --- */
+.input-group {
+  margin-bottom: var(--space-md);
+  width: 100%;
+}
+
+.label {
+  display: block;
+  font-size: 0.875rem;
+  color: var(--text-secondary);
+  margin-bottom: var(--space-sm);
+  font-weight: 500;
 }
 
 .input-field {
   width: 100%;
-  padding: 0.8rem 1rem;
-  background: rgba(0, 0, 0, 0.2);
+  height: 48px;
+  /* Match button height */
+  padding: 0 var(--space-md);
+  background: rgba(15, 23, 42, 0.5);
   border: 1px solid var(--glass-border);
   border-radius: var(--radius-sm);
   color: white;
-  margin-bottom: 1rem;
   font-family: inherit;
-  box-sizing: border-box;
-  /* Fix padding expanding width */
-  transition: border-color 0.2s;
+  font-size: 1rem;
+  transition: border-color 0.2s, box-shadow 0.2s;
+}
+
+textarea.input-field {
+  height: auto;
+  padding-top: var(--space-sm);
+  min-height: 100px;
 }
 
 .input-field:focus {
   outline: none;
   border-color: var(--primary);
-  box-shadow: 0 0 0 2px rgba(139, 92, 246, 0.2);
+  box-shadow: 0 0 0 3px rgba(59, 130, 246, 0.2);
 }
 
-/* Animations */
+/* --- UTILITIES --- */
+.text-center {
+  text-align: center;
+}
+
+.text-right {
+  text-align: right;
+}
+
+.text-muted {
+  color: var(--text-muted);
+}
+
+.text-accent {
+  color: var(--accent);
+}
+
+.text-xl {
+  font-size: 1.25rem;
+  font-weight: 700;
+  color: var(--text-main);
+}
+
+.text-sm {
+  font-size: 0.875rem;
+}
+
+/* Status Badges */
+.badge {
+  display: inline-flex;
+  align-items: center;
+  padding: 0.25rem 0.75rem;
+  border-radius: 9999px;
+  font-size: 0.75rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  white-space: nowrap;
+}
+
+.badge-success {
+  background: var(--success-bg);
+  color: var(--success);
+  border: 1px solid rgba(16, 185, 129, 0.2);
+}
+
+.badge-error {
+  background: var(--error-bg);
+  color: var(--error);
+  border: 1px solid rgba(239, 68, 68, 0.2);
+}
+
+/* Animation */
 @keyframes fadeIn {
   from {
     opacity: 0;
-    transform: translateY(10px);
+    transform: translateY(8px);
   }
 
   to {
@@ -190,24 +390,47 @@ a:hover {
   animation: fadeIn 0.4s ease-out forwards;
 }
 
-/* Status Badge */
-.badge {
-  display: inline-block;
-  padding: 0.25rem 0.75rem;
-  border-radius: 99px;
-  font-size: 0.85rem;
-  font-weight: 600;
-  text-transform: uppercase;
-}
+/* --- PRINT STYLES --- */
+@media print {
 
-.badge-success {
-  background: rgba(34, 197, 94, 0.2);
-  color: #4ade80;
-  border: 1px solid rgba(34, 197, 94, 0.3);
-}
+  /* Hide everything by default */
+  body * {
+    visibility: hidden;
+  }
 
-.badge-error {
-  background: rgba(239, 68, 68, 0.2);
-  color: #f87171;
-  border: 1px solid rgba(239, 68, 68, 0.3);
+  /* Helper class for printable area */
+  .printable,
+  .printable * {
+    visibility: visible;
+  }
+
+  .printable {
+    position: absolute;
+    left: 0;
+    top: 0;
+    width: 100%;
+    margin: 0;
+    padding: 20px;
+    background: white !important;
+    /* Force white background for print */
+    color: black !important;
+    border: none !important;
+    box-shadow: none !important;
+  }
+
+  /* Force headers/tables to be black text */
+  .printable h1,
+  .printable h2,
+  .printable h3,
+  .printable p,
+  .printable td,
+  .printable th {
+    color: black !important;
+    -webkit-background-clip: unset !important;
+  }
+
+  .printable .btn {
+    display: none !important;
+    /* Hide buttons in print view */
+  }
 }

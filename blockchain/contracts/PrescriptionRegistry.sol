@@ -3,15 +3,17 @@ pragma solidity ^0.8.19;
 
 contract PrescriptionRegistry {
     
-    enum Status { ISSUED, DISPENSED }
+    enum Status { CREATED, ACTIVE, USED, EXPIRED }
 
     struct Prescription {
         bytes32 id;
         address issuer;
         bytes32 patientHash;
         bytes32 medicationHash;
-        uint256 quantity; // or other metadata
-        uint256 expiryDate; // New validation field
+        uint256 quantity; 
+        uint256 usageCount; // New: Track usage
+        uint256 maxUsage;   // New: Max allowed usage
+        uint256 expiryDate; 
         Status status;
         uint256 timestamp;
     }
@@ -21,10 +23,10 @@ contract PrescriptionRegistry {
     mapping(address => bool) public pharmacies;
 
     address public owner;
-    // uint256 public prescriptionCount; // Removed as we use custom IDs
 
-    event PrescriptionIssued(bytes32 indexed id, address indexed issuer, bytes32 patientHash);
-    event PrescriptionDispensed(bytes32 indexed id, address indexed pharmacy);
+    event PrescriptionCreated(bytes32 indexed id, address indexed issuer, bytes32 patientHash); // Renamed from Issued
+    event PrescriptionDispensed(bytes32 indexed id, address indexed pharmacy, uint256 remainingUsage); // Updated
+    event PrescriptionExpired(bytes32 indexed id); // New
     event RoleGranted(bytes32 role, address indexed account);
 
     modifier onlyOwner() {
@@ -56,9 +58,17 @@ contract PrescriptionRegistry {
         emit RoleGranted(keccak256("PHARMACY"), _pharmacy);
     }
 
-    function issuePrescription(bytes32 _id, bytes32 _patientHash, bytes32 _medicationHash, uint256 _quantity, uint256 _expiryDate) external onlyDoctor {
+    function issuePrescription(
+        bytes32 _id, 
+        bytes32 _patientHash, 
+        bytes32 _medicationHash, 
+        uint256 _quantity, 
+        uint256 _expiryDate,
+        uint256 _maxUsage
+    ) external onlyDoctor {
         require(prescriptions[_id].id == bytes32(0), "ID already exists");
         require(_expiryDate > block.timestamp, "Expiry must be in future");
+        require(_maxUsage > 0, "Max usage must be > 0");
         
         prescriptions[_id] = Prescription({
             id: _id,
@@ -66,29 +76,62 @@ contract PrescriptionRegistry {
             patientHash: _patientHash,
             medicationHash: _medicationHash,
             quantity: _quantity,
+            usageCount: 0,
+            maxUsage: _maxUsage,
             expiryDate: _expiryDate,
-            status: Status.ISSUED,
+            status: Status.ACTIVE, // Created directly as ACTIVE
             timestamp: block.timestamp
         });
 
-        emit PrescriptionIssued(_id, msg.sender, _patientHash);
+        emit PrescriptionCreated(_id, msg.sender, _patientHash);
     }
 
     function dispensePrescription(bytes32 _id) external onlyPharmacy {
         require(prescriptions[_id].id != bytes32(0), "Invalid ID");
-        require(prescriptions[_id].status == Status.ISSUED, "Already dispensed");
-        require(block.timestamp <= prescriptions[_id].expiryDate, "Prescription expired");
+        
+        Prescription storage p = prescriptions[_id];
 
-        prescriptions[_id].status = Status.DISPENSED;
-        emit PrescriptionDispensed(_id, msg.sender);
+        // Check Expiry
+        if (block.timestamp > p.expiryDate) {
+            p.status = Status.EXPIRED;
+            emit PrescriptionExpired(_id);
+            revert("Prescription expired");
+        }
+
+        require(p.status == Status.ACTIVE, "Not active");
+        require(p.usageCount < p.maxUsage, "Usage limit reached");
+
+        p.usageCount++;
+
+        if (p.usageCount >= p.maxUsage) {
+            p.status = Status.USED;
+        }
+
+        emit PrescriptionDispensed(_id, msg.sender, p.maxUsage - p.usageCount);
     }
 
     function getPrescription(bytes32 _id) external view returns (Prescription memory) {
         return prescriptions[_id];
     }
     
-    function verifyPrescription(bytes32 _id) external view returns (bool, Status) {
-        if (prescriptions[_id].id == bytes32(0)) return (false, Status.ISSUED);
-        return (true, prescriptions[_id].status);
+    function verifyPrescription(bytes32 _id) external view returns (bool, Status, uint256 remaining) {
+        if (prescriptions[_id].id == bytes32(0)) return (false, Status.CREATED, 0);
+        
+        Prescription memory p = prescriptions[_id];
+        
+        // Dynamic status check for view
+        Status currentStatus = p.status;
+        if (currentStatus == Status.ACTIVE && block.timestamp > p.expiryDate) {
+            currentStatus = Status.EXPIRED;
+        }
+
+        uint256 rem = (p.maxUsage > p.usageCount) ? (p.maxUsage - p.usageCount) : 0;
+        return (true, currentStatus, rem);
+    }
+    // --- Inventory / Batch Logic ---
+    event BatchRegistered(string batchId, bytes32 hash, address indexed pharmacy);
+
+    function registerBatch(string memory _batchId, bytes32 _hash) external onlyPharmacy {
+        emit BatchRegistered(_batchId, _hash, msg.sender);
     }
 }
