@@ -1,7 +1,6 @@
 import { useState, useEffect } from 'react';
 import { ethers } from 'ethers';
 import axios from 'axios';
-import { QRCodeCanvas } from 'qrcode.react';
 import jsPDF from 'jspdf';
 import contractInfo from '../contractInfo.json';
 
@@ -12,6 +11,8 @@ const DoctorDashboard = ({ account }) => {
     const [formData, setFormData] = useState({
         patientName: '',
         age: '',
+        patientDOB: '',
+        patientEmail: '',
         diagnosis: '',
         allergies: '',
         medicines: [{ name: '', quantity: 1, dosage: '', instructions: '' }],
@@ -128,6 +129,8 @@ const DoctorDashboard = ({ account }) => {
                 doctorAddress: account,
                 patientName: formData.patientName,
                 patientAge: Number(formData.age),
+                patientDOB: formData.patientDOB,
+                patientEmail: formData.patientEmail,
                 diagnosis: formData.diagnosis,
                 allergies: formData.allergies,
                 medicines: formData.medicines,
@@ -137,18 +140,21 @@ const DoctorDashboard = ({ account }) => {
                 patientHash: patientHash
             });
 
-            const { patientCredentials } = backendRes.data;
+            const { patientCredentials, emailSent, emailError } = backendRes.data;
 
             // Set for display
             setLastIssuedPrescription({
                 blockchainId: pId,
                 patientName: formData.patientName,
-                patientUsername: patientCredentials.username, // Store for display/PDF
+                patientEmail: formData.patientEmail,
+                patientUsername: patientCredentials.username,
                 age: formData.age,
                 medicines: formData.medicines,
                 notes: formData.notes,
                 expiryDate: expiryDate,
-                timestamp: new Date().toLocaleString()
+                timestamp: new Date().toLocaleString(),
+                emailSent: emailSent,
+                emailError: emailError
             });
 
             setStatus(`Success! Prescription #${pId} Issued.`);
@@ -247,6 +253,16 @@ const DoctorDashboard = ({ account }) => {
                         <div className="input-group" style={{ flex: 1 }}>
                             <label className="label">Age</label>
                             <input className="input-field" name="age" placeholder="45" type="number" value={formData.age} onChange={handleChange} required />
+                        </div>
+                    </div>
+                    <div className="flex gap-md" style={{ flexDirection: 'row', marginTop: 'var(--space-md)' }}>
+                        <div className="input-group" style={{ flex: 1 }}>
+                            <label className="label">Date of Birth</label>
+                            <input className="input-field" name="patientDOB" type="date" value={formData.patientDOB} onChange={handleChange} required />
+                        </div>
+                        <div className="input-group" style={{ flex: 2 }}>
+                            <label className="label">Email Address</label>
+                            <input className="input-field" name="patientEmail" type="email" placeholder="patient@example.com" value={formData.patientEmail} onChange={handleChange} required />
                         </div>
                     </div>
                 </div>
@@ -370,10 +386,11 @@ const DoctorDashboard = ({ account }) => {
                         </div>
 
                         <div style={{ display: 'flex', gap: '2rem', flexDirection: window.innerWidth < 600 ? 'column' : 'row' }}>
-                            {/* Left: Info */}
-                            <div style={{ flex: 2, display: 'grid', gap: '0.8rem', fontSize: '0.95rem' }}>
+                            {/* Prescription Info */}
+                            <div style={{ flex: 1, display: 'grid', gap: '0.8rem', fontSize: '0.95rem' }}>
                                 <p><strong>ID:</strong> <span style={{ fontSize: '1.2rem', color: 'var(--accent-color)' }}>#{lastIssuedPrescription.blockchainId}</span></p>
                                 <p><strong>Patient:</strong> {lastIssuedPrescription.patientName} ({lastIssuedPrescription.age} yrs)</p>
+                                <p><strong>Email:</strong> {lastIssuedPrescription.patientEmail}</p>
                                 <p><strong>Login Username:</strong> <code style={{ background: '#eee', padding: '2px 5px', borderRadius: '4px' }}>{lastIssuedPrescription.patientUsername}</code></p>
 
                                 <div>
@@ -385,18 +402,23 @@ const DoctorDashboard = ({ account }) => {
                                     </ul>
                                 </div>
                                 {lastIssuedPrescription.notes && <p><strong>Notes:</strong> {lastIssuedPrescription.notes}</p>}
-                            </div>
 
-                            {/* Right: QR Code */}
-                            <div style={{ flex: 1, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', background: 'white', padding: '1rem', borderRadius: '8px' }}>
-                                <QRCodeCanvas
-                                    value={JSON.stringify({
-                                        id: lastIssuedPrescription.blockchainId,
-                                        url: `http://localhost:5000/api/prescriptions/${lastIssuedPrescription.blockchainId}`
-                                    })}
-                                    size={128}
-                                />
-                                <span style={{ color: 'black', fontSize: '0.8rem', marginTop: '0.5rem', textAlign: 'center' }}>Scan to Verify</span>
+                                {/* Email Status */}
+                                {lastIssuedPrescription.emailSent ? (
+                                    <div style={{ marginTop: '1rem', padding: '0.8rem', background: '#d1fae5', border: '1px solid #10b981', borderRadius: '6px' }}>
+                                        <p style={{ margin: 0, color: '#065f46', fontSize: '0.9rem' }}>
+                                            ✅ <strong>Email Sent Successfully</strong><br />
+                                            <span style={{ fontSize: '0.85rem' }}>Password-protected PDF sent to patient's email</span>
+                                        </p>
+                                    </div>
+                                ) : (
+                                    <div style={{ marginTop: '1rem', padding: '0.8rem', background: '#fee2e2', border: '1px solid #ef4444', borderRadius: '6px' }}>
+                                        <p style={{ margin: 0, color: '#991b1b', fontSize: '0.9rem' }}>
+                                            ⚠️ <strong>Email Failed</strong><br />
+                                            <span style={{ fontSize: '0.85rem' }}>{lastIssuedPrescription.emailError || 'Unknown error'}</span>
+                                        </p>
+                                    </div>
+                                )}
                             </div>
                         </div>
 

@@ -46,9 +46,11 @@ async function testFlow() {
                 doctorAddress,
                 patientName: 'John Doe',
                 patientAge: 30,
+                patientDOB: '1994-01-01',
+                patientEmail: 'test@example.com', // Required for PDF email delivery
                 diagnosis: 'Flu',
                 allergies: 'None',
-                medicines: [{ name: 'Paracetamol', dosage: '500mg', instructions: 'Twice a day' }],
+                medicines: [{ name: 'Paracetamol', dosage: '500mg', quantity: 1, instructions: 'Twice a day' }],
                 notes: 'Rest well',
                 expiryDate: new Date(Date.now() + 86400000).toISOString()
             })

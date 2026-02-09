@@ -5,6 +5,8 @@ const PrescriptionSchema = new mongoose.Schema({
     doctorAddress: { type: String, required: true },
     patientName: { type: String }, // Encrypted
     patientUsername: { type: String, required: true }, // Generated once: normalize(name) + "-" + prescriptionId
+    patientDOB: { type: Date, required: true }, // Date of Birth for PDF password
+    patientEmail: { type: String, required: true }, // Encrypted - for PDF delivery
     patientAge: { type: Number },
     diagnosis: { type: String }, // Encrypted
     allergies: { type: String }, // Encrypted

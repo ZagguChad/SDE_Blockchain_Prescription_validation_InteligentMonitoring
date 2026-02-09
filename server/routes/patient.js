@@ -46,6 +46,14 @@ router.post('/access', async (req, res) => {
     const { patientUsername, prescriptionId } = req.body;
 
     try {
+        // Check if DB is connected
+        const mongoose = require('mongoose');
+        if (mongoose.connection.readyState !== 1) {
+            return res.status(503).json({
+                message: 'Service temporarily unavailable. Database connection not ready.'
+            });
+        }
+
         if (!patientUsername || !prescriptionId) {
             return res.status(400).json({ message: 'Please provide both username and prescription ID' });
         }

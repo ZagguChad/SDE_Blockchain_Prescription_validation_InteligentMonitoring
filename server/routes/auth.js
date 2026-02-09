@@ -70,6 +70,14 @@ router.post('/login', async (req, res) => {
     const { email, password } = req.body;
 
     try {
+        // Check if DB is connected
+        const mongoose = require('mongoose');
+        if (mongoose.connection.readyState !== 1) {
+            return res.status(503).json({
+                message: 'Service temporarily unavailable. Database connection not ready.'
+            });
+        }
+
         // Check for user by email only (username removed - patients use /api/patient/access)
         let user;
         if (email) {

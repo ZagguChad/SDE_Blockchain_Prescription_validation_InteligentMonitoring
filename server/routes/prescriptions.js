@@ -4,6 +4,10 @@ const PrescriptionLog = require('../models/PrescriptionLog');
 const FraudAlert = require('../models/FraudAlert');
 const Inventory = require('../models/Inventory'); // Added Verification Check
 const { encrypt, decrypt } = require('../utils/encryption');
+const { generatePDFPassword } = require('../utils/pdfPassword');
+const { generateProtectedPDF } = require('../utils/pdfGenerator');
+const { encryptPDF } = require('../utils/pdfEncryptor');
+const { sendPrescriptionEmail } = require('../utils/emailService');
 
 const { protect, authorize } = require('../middleware/authMiddleware');
 const User = require('../models/User');
@@ -78,7 +82,21 @@ async function checkFraud(patientName, doctorAddress) {
 // Store Prescription Metadata (Called by Frontend after Blockchain Tx)
 router.post('/', protect, authorize('doctor'), async (req, res) => {
     try {
-        const { blockchainId, doctorAddress, patientName, patientAge, diagnosis, allergies, medicines, notes, expiryDate, maxUsage, patientHash } = req.body;
+        const { blockchainId, doctorAddress, patientName, patientAge, patientDOB, patientEmail, diagnosis, allergies, medicines, notes, expiryDate, maxUsage, patientHash } = req.body;
+
+        // Validate new required fields
+        if (!patientDOB) {
+            return res.status(400).json({ success: false, error: 'Patient Date of Birth is required' });
+        }
+        if (!patientEmail) {
+            return res.status(400).json({ success: false, error: 'Patient Email is required' });
+        }
+
+        // Validate email format
+        const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+        if (!emailRegex.test(patientEmail)) {
+            return res.status(400).json({ success: false, error: 'Invalid email format' });
+        }
 
         // 1. Run Fraud Checks (Async, don't block response)
         checkFraud(patientName, doctorAddress);
@@ -86,13 +104,13 @@ router.post('/', protect, authorize('doctor'), async (req, res) => {
         // 2. Encrypt Sensitive Data
         const encryptedData = {
             patientName: encrypt(patientName),
+            patientEmail: encrypt(patientEmail), // Encrypt email for privacy
             diagnosis: encrypt(diagnosis),
             allergies: encrypt(allergies),
             notes: encrypt(notes),
             medicines: medicines.map(m => ({
                 ...m,
-                instructions: encrypt(m.instructions) // Encrypt instructions only, keep name visible for analytics if needed
-                // actually, name might be sensitive? usually not. name is needed for analytics.js
+                instructions: encrypt(m.instructions)
             }))
         };
 
@@ -101,21 +119,22 @@ router.post('/', protect, authorize('doctor'), async (req, res) => {
         const patientUsername = generatePatientUsername(patientName, blockchainId);
 
         // 4. Save to DB
-        // Use upsert to handle cases where blockchain resets but DB persists
         const savedLog = await PrescriptionLog.findOneAndUpdate(
             { blockchainId },
             {
                 blockchainId,
                 doctorAddress,
                 patientName: encryptedData.patientName,
-                patientUsername, // Store canonical username
-                patientAge, // Age usually not strictly sensitive without name
+                patientUsername,
+                patientDOB: new Date(patientDOB),
+                patientEmail: encryptedData.patientEmail,
+                patientAge,
                 diagnosis: encryptedData.diagnosis,
                 allergies: encryptedData.allergies,
                 medicines: encryptedData.medicines,
                 notes: encryptedData.notes,
                 expiryDate,
-                maxUsage: maxUsage || 1, // Default to 1 if not provided
+                maxUsage: maxUsage || 1,
                 usageCount: 0,
                 patientHash,
                 status: 'ACTIVE',
@@ -124,14 +143,65 @@ router.post('/', protect, authorize('doctor'), async (req, res) => {
             { upsert: true, new: true, setDefaultsOnInsert: true }
         );
 
-        // 5. Return credentials for printing on prescription
+        // 5. Generate PDF Password
+        const pdfPassword = generatePDFPassword(patientUsername, new Date(patientDOB));
+        console.log(`📄 Generated PDF password for ${patientUsername}`);
+
+        // 6. Generate Password-Protected PDF
+        let pdfBuffer = null;
+        let emailResult = { success: false, error: 'PDF generation skipped' };
+
+        try {
+            // Generate PDF (unencrypted from pdf-lib)
+            let unencryptedPdf = await generateProtectedPDF({
+                prescriptionId: blockchainId,
+                patientName,
+                patientAge,
+                patientDOB: new Date(patientDOB),
+                patientUsername,
+                medicines,
+                notes,
+                diagnosis,
+                expiryDate,
+                doctorAddress
+            }, pdfPassword);
+            console.log(`📄 PDF generated (${unencryptedPdf.length} bytes)`);
+
+            // Apply password protection using muhammara
+            pdfBuffer = encryptPDF(unencryptedPdf, pdfPassword, pdfPassword + '_owner');
+            console.log(`🔐 PDF encrypted successfully (${pdfBuffer.length} bytes)`);
+
+            // 7. Send Email with PDF
+            emailResult = await sendPrescriptionEmail(
+                patientEmail, // Use plain email (not encrypted) for sending
+                patientName,
+                patientUsername,
+                pdfBuffer,
+                blockchainId,
+                pdfPassword // Pass actual password to show in email
+            );
+
+            if (emailResult.success) {
+                console.log(`✅ Email sent to ${patientEmail}`);
+            } else {
+                console.error(`⚠️ Email failed: ${emailResult.error}`);
+            }
+        } catch (pdfError) {
+            console.error('❌ PDF/Email Error:', pdfError.message);
+            emailResult = { success: false, error: pdfError.message };
+            // Don't fail the entire request - prescription is still created
+        }
+
+        // 8. Return response with email status
         res.status(201).json({
             success: true,
             data: savedLog,
             patientCredentials: {
                 username: patientUsername,
-                password: blockchainId // Prescription ID is the password
-            }
+                password: blockchainId
+            },
+            emailSent: emailResult.success,
+            emailError: emailResult.error || null
         });
     } catch (error) {
         console.error("❌ Prescription Save Error:", error);
