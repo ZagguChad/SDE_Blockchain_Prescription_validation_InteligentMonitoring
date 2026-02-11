@@ -22,9 +22,13 @@ const PrescriptionSchema = new mongoose.Schema({
     usageCount: { type: Number, default: 0 }, // New
     patientHash: { type: String }, // New: Store on-chain hash for verification
     status: { type: String, enum: ['CREATED', 'ACTIVE', 'USED', 'EXPIRED', 'DISPENSED'], default: 'ACTIVE' },
+    blockchainSynced: { type: Boolean, default: false },
+    txHash: { type: String },
+    blockNumber: { type: Number },
     dispensedAt: { type: Date },
     issuedAt: { type: Date, default: Date.now },
     // Part 3: Billing & Invoice
+    dispenseId: { type: String }, // Transaction identifier: DISP-{blockchainId}-{timestamp}
     totalCost: { type: Number },
     invoiceDetails: [{
         name: String,

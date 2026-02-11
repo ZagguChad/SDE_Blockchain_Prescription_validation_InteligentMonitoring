@@ -1,6 +1,7 @@
 const express = require('express');
 const router = express.Router();
 const Inventory = require('../models/Inventory');
+const { generateMedicineId } = require('../models/Inventory');
 const FraudAlert = require('../models/FraudAlert');
 
 // --- Helper: Normalize Medicine Data ---
@@ -20,8 +21,11 @@ function normalizeMedicineData(medicine, index = 0) {
         medicine.qty ||
         1; // Default to 1 if not specified
 
+    const trimmedName = medicineName ? medicineName.trim() : null;
+
     return {
-        name: medicineName ? medicineName.trim() : null,
+        name: trimmedName,
+        medicineId: trimmedName ? generateMedicineId(trimmedName) : null,
         quantity: parseInt(quantity) || 1,
         originalData: medicine,
         index
@@ -56,20 +60,25 @@ router.post('/add', async (req, res) => {
         if (Number(price) <= 0) return res.status(400).json({ success: false, message: 'Price must be positive' });
         if (new Date(expiryDate) <= new Date()) return res.status(400).json({ success: false, message: 'Cannot add expired medicine' });
 
+        // Auto-generate medicineId from medicineName (pre-save hook also does this, but we set it explicitly)
+        const medicineId = generateMedicineId(medicineName);
+
         const newBatch = new Inventory({
             batchId,
-            medicineName,
+            medicineId,
+            medicineName: medicineName.trim(),
             supplierId,
             quantityInitial: quantity,
             quantityAvailable: quantity,
             expiryDate,
             pharmacyAddress,
-            pricePerUnit: price // Ensure mapping
+            pricePerUnit: price
         });
 
         await newBatch.save();
         res.status(201).json({ success: true, data: newBatch });
     } catch (error) {
+        console.error('❌ Inventory Add Error:', error.message);
         res.status(500).json({ success: false, error: error.message });
     }
 });
@@ -84,14 +93,16 @@ router.get('/', async (req, res) => {
     }
 });
 
-// 3. Get Specific Medicine Stock
+// 3. Get Specific Medicine Stock (by medicineId or name)
 router.get('/stock/:medicineName', async (req, res) => {
     try {
         const { medicineName } = req.params;
-        // Find active batches that are not expired
+        const medicineId = generateMedicineId(medicineName);
         const now = new Date();
+
+        // Primary: lookup by canonical medicineId
         const batches = await Inventory.find({
-            medicineName: { $regex: new RegExp(medicineName, 'i') },
+            medicineId: medicineId,
             status: 'ACTIVE',
             expiryDate: { $gt: now },
             quantityAvailable: { $gt: 0 }
@@ -103,7 +114,7 @@ router.get('/stock/:medicineName', async (req, res) => {
     }
 });
 
-// 4. Dispense/Update Stock
+// 4. Dispense/Update Stock (single batch)
 router.post('/dispense', async (req, res) => {
     try {
         const { batchId, quantity } = req.body;
@@ -120,6 +131,9 @@ router.post('/dispense', async (req, res) => {
 
         batch.quantityAvailable -= quantity;
 
+        // Defensive: prevent negative stock
+        if (batch.quantityAvailable < 0) batch.quantityAvailable = 0;
+
         if (batch.quantityAvailable === 0) {
             batch.status = 'DEPLETED';
         }
@@ -127,6 +141,7 @@ router.post('/dispense', async (req, res) => {
         await batch.save();
         res.json({ success: true, message: 'Stock updated', currentStock: batch.quantityAvailable });
     } catch (error) {
+        console.error('❌ Inventory Dispense Error:', error.message);
         res.status(500).json({ success: false, error: error.message });
     }
 });
@@ -161,20 +176,21 @@ router.get('/alerts/expiry', async (req, res) => {
 });
 
 // 6. Bulk Consume (Strict 3-Phase: Normalize -> Check All -> Deduct All)
+// NOTE: This is now only used for standalone inventory operations.
+// The dispense flow uses complete-dispense in prescriptions.js (which has its own deduction logic).
 router.post('/consume', async (req, res) => {
     try {
         const { medicines } = req.body; // Expects [{ name: 'Paracetamol', quantity: 2 }, ...]
         const results = [];
 
         // PHASE 1: NORMALIZATION & VALIDATION
-        // Normalize medicine data to handle field name variations
         const normalizedMedicines = [];
 
         for (let i = 0; i < medicines.length; i++) {
             const normalized = normalizeMedicineData(medicines[i], i);
 
             // CRITICAL VALIDATION: Ensure medicine name exists after normalization
-            if (!normalized.name) {
+            if (!normalized.name || !normalized.medicineId) {
                 console.error('❌ Inventory Consume Error: Medicine name is missing or empty', {
                     originalMedicine: medicines[i],
                     normalizedMedicine: normalized,
@@ -198,13 +214,12 @@ router.post('/consume', async (req, res) => {
             normalizedMedicines.push(normalized);
         }
 
-        // PHASE 2: STRICT VERIFICATION
-        // Check if we have enough stock for *every* medicine requested.
+        // PHASE 2: STRICT VERIFICATION (using medicineId)
         for (const med of normalizedMedicines) {
             const availableStock = await Inventory.aggregate([
                 {
                     $match: {
-                        medicineName: { $regex: new RegExp(`^${med.name}$`, 'i') }, // Exact match preferred
+                        medicineId: med.medicineId,
                         status: 'ACTIVE',
                         expiryDate: { $gt: new Date() }
                     }
@@ -214,7 +229,7 @@ router.post('/consume', async (req, res) => {
 
             const total = availableStock.length > 0 ? availableStock[0].total : 0;
             if (total < med.quantity) {
-                console.warn(`⚠️ Insufficient Stock: ${med.name} - Required: ${med.quantity}, Available: ${total}`);
+                console.warn(`⚠️ Insufficient Stock: ${med.name} (${med.medicineId}) - Required: ${med.quantity}, Available: ${total}`);
                 return res.status(400).json({
                     success: false,
                     message: `Insufficient stock for "${med.name}". Required: ${med.quantity}, Available: ${total}`
@@ -222,48 +237,88 @@ router.post('/consume', async (req, res) => {
             }
         }
 
-        // PHASE 3: EXECUTION (Deduct Stock & Calculate Cost)
-        for (const med of normalizedMedicines) {
-            const reqQty = med.quantity;
-            let remaining = reqQty;
-            let totalCost = 0;
+        // PHASE 3: EXECUTION (Deduct Stock & Calculate Cost) with rollback journal
+        const deductionJournal = []; // Track deductions for potential rollback
 
-            // Find batches with stock, oldest first (FIFO)
-            const batches = await Inventory.find({
-                medicineName: { $regex: new RegExp(`^${med.name}$`, 'i') },
-                status: 'ACTIVE',
-                quantityAvailable: { $gt: 0 },
-                expiryDate: { $gt: new Date() }
-            }).sort({ expiryDate: 1 });
+        try {
+            for (const med of normalizedMedicines) {
+                const reqQty = med.quantity;
+                let remaining = reqQty;
+                let totalCost = 0;
 
-            // Decrement across batches
-            for (const batch of batches) {
-                if (remaining <= 0) break;
+                // Find batches with stock, oldest first (FIFO), using medicineId
+                const batches = await Inventory.find({
+                    medicineId: med.medicineId,
+                    status: 'ACTIVE',
+                    quantityAvailable: { $gt: 0 },
+                    expiryDate: { $gt: new Date() }
+                }).sort({ expiryDate: 1 });
 
-                const take = Math.min(batch.quantityAvailable, remaining);
-                batch.quantityAvailable -= take;
-                remaining -= take;
+                // Decrement across batches
+                for (const batch of batches) {
+                    if (remaining <= 0) break;
 
-                // Pricing
-                totalCost += take * (batch.pricePerUnit || 0);
+                    const take = Math.min(batch.quantityAvailable, remaining);
+                    const previousQty = batch.quantityAvailable;
 
-                if (batch.quantityAvailable === 0) batch.status = 'DEPLETED';
-                await batch.save();
+                    batch.quantityAvailable -= take;
+                    // Defensive: prevent negative stock
+                    if (batch.quantityAvailable < 0) batch.quantityAvailable = 0;
+                    remaining -= take;
 
-                // Fraud Check per batch usage
-                await checkInventoryFraud(batch.batchId, take);
+                    // Pricing
+                    totalCost += take * (batch.pricePerUnit || 0);
+
+                    if (batch.quantityAvailable === 0) batch.status = 'DEPLETED';
+                    await batch.save();
+
+                    // Record deduction for rollback
+                    deductionJournal.push({
+                        batchId: batch.batchId,
+                        batchObjectId: batch._id,
+                        quantityDeducted: take,
+                        previousQty: previousQty,
+                        previousStatus: previousQty > 0 ? 'ACTIVE' : batch.status
+                    });
+
+                    // Fraud Check per batch usage
+                    await checkInventoryFraud(batch.batchId, take);
+                }
+
+                results.push({
+                    name: med.name,
+                    medicineId: med.medicineId,
+                    status: 'FILLED',
+                    quantity: reqQty,
+                    cost: totalCost
+                });
             }
-
-            results.push({
-                name: med.name,
-                status: 'FILLED',
-                quantity: reqQty,
-                cost: totalCost
+        } catch (deductionError) {
+            // ROLLBACK: Reverse all deductions made so far
+            console.error('❌ Deduction failed, rolling back...', deductionError.message);
+            for (const entry of deductionJournal) {
+                try {
+                    await Inventory.updateOne(
+                        { _id: entry.batchObjectId },
+                        {
+                            $inc: { quantityAvailable: entry.quantityDeducted },
+                            $set: { status: 'ACTIVE' }
+                        }
+                    );
+                } catch (rollbackErr) {
+                    console.error('❌ CRITICAL: Rollback failed for batch', entry.batchId, rollbackErr.message);
+                }
+            }
+            return res.status(500).json({
+                success: false,
+                message: 'Stock deduction failed. All changes have been rolled back.',
+                error: deductionError.message
             });
         }
 
         res.json({ success: true, results });
     } catch (error) {
+        console.error('❌ Inventory Consume Error:', error.message);
         res.status(500).json({ success: false, error: error.message });
     }
 });

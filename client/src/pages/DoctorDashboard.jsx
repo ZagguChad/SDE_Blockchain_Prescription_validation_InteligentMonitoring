@@ -76,7 +76,20 @@ const DoctorDashboard = ({ account }) => {
             const shortId = rawUniqueHash.substring(2, 8).toUpperCase();
             const prescriptionIdBytes = ethers.encodeBytes32String(shortId);
 
-            const totalQty = formData.medicines.reduce((acc, m) => acc + Number(m.quantity), 0);
+            // Validate each medicine quantity before computing total
+            for (let i = 0; i < formData.medicines.length; i++) {
+                const qty = parseInt(formData.medicines[i].quantity);
+                if (isNaN(qty) || qty <= 0) {
+                    throw new Error(`Medicine #${i + 1} ("${formData.medicines[i].name || 'unnamed'}") has invalid quantity: ${formData.medicines[i].quantity}`);
+                }
+            }
+
+            const totalQty = formData.medicines.reduce((acc, m) => acc + (parseInt(m.quantity) || 0), 0);
+
+            // Safety guard: totalQty MUST be positive before blockchain call
+            if (totalQty <= 0) {
+                throw new Error('Total prescription quantity must be greater than zero.');
+            }
 
             // Expiry Logic: Default 30 days
             const expiryDays = 30;
@@ -123,7 +136,7 @@ const DoctorDashboard = ({ account }) => {
 
             setStatus(`On-chain success! Issued ID: ${pId}. Saving metadata...`);
 
-            // 3. Save Metadata to Backend
+            // 3. Save Metadata to Backend (include blockchain sync info)
             const backendRes = await axios.post('http://localhost:5000/api/prescriptions', {
                 blockchainId: pId,
                 doctorAddress: account,
@@ -137,7 +150,10 @@ const DoctorDashboard = ({ account }) => {
                 notes: formData.notes,
                 expiryDate: expiryDate,
                 maxUsage: maxUsage,
-                patientHash: patientHash
+                patientHash: patientHash,
+                txHash: receipt.hash,
+                blockNumber: receipt.blockNumber,
+                blockchainSynced: receipt.status === 1
             });
 
             const { patientCredentials, emailSent, emailError } = backendRes.data;

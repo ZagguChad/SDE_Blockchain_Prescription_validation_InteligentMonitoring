@@ -73,22 +73,36 @@ const PharmacyDashboard = ({ account }) => {
             }
 
             // 2. Get On-chain Status
-            const provider = new ethers.BrowserProvider(window.ethereum);
-            const contract = new ethers.Contract(CONTRACT_ADDRESS, ABI, provider);
+            try {
+                const provider = new ethers.BrowserProvider(window.ethereum);
+                const contract = new ethers.Contract(CONTRACT_ADDRESS, ABI, provider);
 
-            const formattedId = ethers.encodeBytes32String(searchId);
-            const p = await contract.getPrescription(formattedId);
+                const formattedId = ethers.encodeBytes32String(searchId);
+                const p = await contract.getPrescription(formattedId);
 
-            if (p.issuer === ethers.ZeroAddress) {
-                setStatus('Prescription found in DB but NOT on Blockchain (Sync Error?)');
-                return;
+                if (p.issuer === ethers.ZeroAddress) {
+                    // Blockchain record not found — check DB sync flag
+                    const dbSynced = res.data.data.blockchainSynced;
+                    if (dbSynced) {
+                        // DB says synced but chain doesn't have it — genuine issue
+                        setStatus('⚠️ Blockchain record mismatch. Prescription may need re-sync.');
+                    } else {
+                        setStatus('⏳ Pending Blockchain Confirmation — prescription is viewable but cannot be dispensed yet.');
+                    }
+                    setChainData({ status: 'PENDING_SYNC', pendingSync: true });
+                } else {
+                    setChainData({
+                        status: getStatusString(Number(p.status)),
+                        issuer: p.issuer,
+                        pendingSync: false
+                    });
+                    setStatus('');
+                }
+            } catch (chainErr) {
+                console.warn('Blockchain query failed, showing DB data:', chainErr.message);
+                setStatus('⚠️ Could not verify on blockchain. Showing database record.');
+                setChainData({ status: 'CHAIN_UNAVAILABLE', pendingSync: true });
             }
-
-            setChainData({
-                status: getStatusString(Number(p.status)),
-                issuer: p.issuer
-            });
-            setStatus('');
 
         } catch (error) {
             console.error(error);
@@ -112,24 +126,12 @@ const PharmacyDashboard = ({ account }) => {
 
             const formattedId = ethers.encodeBytes32String(searchId);
 
-            // 1. Validate Prescription Medicine Data
+            // 1. Basic sanity check — backend performs authoritative validation
             if (!data.medicines || data.medicines.length === 0) {
-                throw new Error('Invalid prescription: No medicines found');
+                throw new Error('Invalid prescription: No medicines found. Prescription data may be corrupted.');
             }
 
-            // Check each medicine has required fields
-            for (let i = 0; i < data.medicines.length; i++) {
-                const m = data.medicines[i];
-                if (!m.name || m.name.trim() === '') {
-                    console.error('Invalid medicine data:', m);
-                    throw new Error(`Invalid prescription data: Medicine #${i + 1} is missing a name. Please contact support.`);
-                }
-                if (!m.quantity || isNaN(m.quantity) || m.quantity <= 0) {
-                    throw new Error(`Invalid prescription data: Medicine "${m.name}" has invalid quantity.`);
-                }
-            }
-
-            // 2. Pre-Check Validation (Backend Authoritative)
+            // 2. Pre-Check Validation (Backend Authoritative — stock check without deduction)
             try {
                 const validateRes = await axios.post('http://localhost:5000/api/prescriptions/validate-dispense', {
                     blockchainId: data.blockchainId
@@ -138,13 +140,9 @@ const PharmacyDashboard = ({ account }) => {
                 if (!validateRes.data.success) {
                     throw new Error(validateRes.data.message || "Validation failed");
                 }
-
-                // If we get here, stock exists and data is valid.
                 console.log("✅ Backend Validation Passed");
-
             } catch (validationErr) {
                 console.error("Validation Error:", validationErr);
-                // Extract message from axios error response if available
                 const serverMsg = validationErr.response?.data?.message || validationErr.message;
                 throw new Error(`Cannot Dispense: ${serverMsg}`);
             }
@@ -154,54 +152,41 @@ const PharmacyDashboard = ({ account }) => {
             setStatus('Dispensing transaction sent...');
             await tx.wait();
 
-            setStatus('Dispensed Successfully! Updating Inventory...');
+            setStatus('Dispensed on-chain! Updating inventory & generating invoice...');
             setChainData(prev => ({ ...prev, status: 'DISPENSED' }));
 
-            // 4. Update Inventory (Auto-Consume)
-            if (data.medicines && data.medicines.length > 0) {
-                const consumeRes = await axios.post('http://localhost:5000/api/inventory/consume', {
-                    medicines: data.medicines
+            // 4. Complete Dispense — SINGLE server call handles:
+            //    Stock deduction + Invoice computation + PDF generation + Email
+            //    (No separate /consume call — fixes double-deduction bug)
+            try {
+                const dispenseRes = await axios.post('http://localhost:5000/api/prescriptions/complete-dispense', {
+                    blockchainId: data.blockchainId
                 });
-                console.log("Inventory Update:", consumeRes.data);
-                if (consumeRes.data.success) {
-                    const invoiceItems = consumeRes.data.results.map(r => ({
-                        name: r.name,
-                        quantity: r.quantity,
-                        // Derived Unit Price (Total Cost / Quantity)
-                        pricePerUnit: r.quantity > 0 ? (r.cost / r.quantity) : 0,
-                        total: r.cost
-                    }));
 
-                    const totalBill = consumeRes.data.results.reduce((acc, curr) => acc + (curr.cost || 0), 0);
+                if (dispenseRes.data.success) {
+                    setStatus('Dispensed, Stock Updated & Invoice Generated!');
 
-                    // 5. Finalize Dispense (Update Status, Invalidate Access, Save Invoice)
-                    try {
-                        await axios.post('http://localhost:5000/api/prescriptions/complete-dispense', {
-                            blockchainId: data.blockchainId,
-                            invoiceDetails: invoiceItems,
-                            totalCost: totalBill
-                        });
-                        setStatus('Dispensed, Stock Updated & Patient Access Closed!');
-                    } catch (finalErr) {
-                        console.error("Finalize Dispense Error:", finalErr);
-                        setStatus('Dispensed & Stock Updated, but Server Status Update Failed.');
-                    }
-
-                    // Render Invoice Data
+                    // Render Invoice Data from server response (not client-computed)
                     setInvoiceData({
                         blockchainId: data.blockchainId,
+                        dispenseId: dispenseRes.data.dispenseId,
                         patientName: data.patientName,
-                        results: invoiceItems,
-                        totalAmount: totalBill,
+                        results: dispenseRes.data.invoiceDetails,
+                        totalAmount: dispenseRes.data.totalCost,
+                        invoicePdfBase64: dispenseRes.data.invoicePdfBase64,
                         date: new Date()
                     });
                 } else {
-                    setStatus('Dispensed on Chain, but Inventory Error (Check Logs)');
+                    setStatus('Dispensed on-chain, but server-side processing failed: ' + (dispenseRes.data.message || 'Unknown error'));
                 }
-
-                fetchActivity();
-
+            } catch (finalErr) {
+                console.error("Complete Dispense Error:", finalErr);
+                const serverMsg = finalErr.response?.data?.message || finalErr.message;
+                setStatus(`Dispensed on-chain, but server error: ${serverMsg}`);
             }
+
+            fetchActivity();
+
         } catch (error) {
             console.error(error);
             let msg = error.reason || error.message;
@@ -210,6 +195,29 @@ const PharmacyDashboard = ({ account }) => {
             setStatus('Error: ' + msg);
         }
         setLoading(false);
+    };
+
+    // Download Invoice PDF from base64
+    const downloadInvoicePDF = () => {
+        if (!invoiceData?.invoicePdfBase64) {
+            alert('Invoice PDF not available');
+            return;
+        }
+        const byteCharacters = atob(invoiceData.invoicePdfBase64);
+        const byteNumbers = new Array(byteCharacters.length);
+        for (let i = 0; i < byteCharacters.length; i++) {
+            byteNumbers[i] = byteCharacters.charCodeAt(i);
+        }
+        const byteArray = new Uint8Array(byteNumbers);
+        const blob = new Blob([byteArray], { type: 'application/pdf' });
+        const url = window.URL.createObjectURL(blob);
+        const link = document.createElement('a');
+        link.href = url;
+        link.download = `Invoice_${invoiceData.dispenseId || invoiceData.blockchainId}.pdf`;
+        document.body.appendChild(link);
+        link.click();
+        document.body.removeChild(link);
+        window.URL.revokeObjectURL(url);
     };
 
     const handleRegisterBatch = async () => {
@@ -329,14 +337,20 @@ const PharmacyDashboard = ({ account }) => {
                                 </div>
                                 <div className="col-span-12">
                                     <h4 className="text-muted text-sm">Prescribed Medicines</h4>
-                                    <ul style={{ paddingLeft: '1.2rem', marginTop: '0.5rem' }}>
-                                        {data.medicines && data.medicines.map((m, i) => (
-                                            <li key={i}>
-                                                <strong style={{ color: 'var(--text-main)' }}>{m.name}</strong>
-                                                <span style={{ color: 'var(--text-muted)' }}> - {m.dosage} (Qty: {m.quantity})</span>
-                                            </li>
-                                        ))}
-                                    </ul>
+                                    {data.medicines && data.medicines.length > 0 ? (
+                                        <ul style={{ paddingLeft: '1.2rem', marginTop: '0.5rem' }}>
+                                            {data.medicines.map((m, i) => (
+                                                <li key={i}>
+                                                    <strong style={{ color: 'var(--text-main)' }}>{m.name || m.medicineName || 'Unknown'}</strong>
+                                                    <span style={{ color: 'var(--text-muted)' }}> - {m.dosage || 'N/A'} (Qty: {m.quantity || 1})</span>
+                                                </li>
+                                            ))}
+                                        </ul>
+                                    ) : (
+                                        <p style={{ color: 'var(--error)', marginTop: '0.5rem' }}>
+                                            ⚠️ Prescription data corrupted — no medicines found.
+                                        </p>
+                                    )}
                                 </div>
                                 {data.notes && (
                                     <div className="col-span-12" style={{ background: 'rgba(0,0,0,0.2)', padding: 'var(--space-md)', borderRadius: 'var(--radius-sm)' }}>
@@ -346,7 +360,7 @@ const PharmacyDashboard = ({ account }) => {
                                 )}
                             </div>
 
-                            {chainData.status === 'ACTIVE' && (
+                            {chainData.status === 'ACTIVE' && data.medicines && data.medicines.length > 0 && (
                                 <div className="flex justify-end" style={{ marginTop: 'var(--space-lg)', paddingTop: 'var(--space-lg)', borderTop: '1px solid var(--glass-border)' }}>
                                     <button
                                         className="btn"
@@ -371,6 +385,7 @@ const PharmacyDashboard = ({ account }) => {
                                 <div className="text-right">
                                     <p>Date: {invoiceData.date.toLocaleDateString()}</p>
                                     <p>Prescription: #{invoiceData.blockchainId}</p>
+                                    {invoiceData.dispenseId && <p className="text-sm text-muted">{invoiceData.dispenseId}</p>}
                                 </div>
                             </div>
 
@@ -400,9 +415,12 @@ const PharmacyDashboard = ({ account }) => {
                                 <h2 style={{ color: 'var(--accent)' }}>${invoiceData.totalAmount.toFixed(2)}</h2>
                             </div>
 
-                            <div className="text-center" style={{ marginTop: '2rem' }}>
-                                <button className="btn" onClick={() => window.print()}>Print Invoice</button>
-                                <button className="btn btn-outline" style={{ marginLeft: '10px' }} onClick={() => { setData(null); setChainData(null); setInvoiceData(null); setSearchId(''); }}>Done</button>
+                            <div className="text-center" style={{ marginTop: '2rem', display: 'flex', justifyContent: 'center', gap: '10px', flexWrap: 'wrap' }}>
+                                {invoiceData.invoicePdfBase64 && (
+                                    <button className="btn" style={{ background: 'linear-gradient(135deg, #27ae60, #2ecc71)' }} onClick={downloadInvoicePDF}>📥 Download Invoice PDF</button>
+                                )}
+                                <button className="btn" onClick={() => window.print()}>🖨️ Print Invoice</button>
+                                <button className="btn btn-outline" onClick={() => { setData(null); setChainData(null); setInvoiceData(null); setSearchId(''); }}>Done</button>
                             </div>
                         </div>
                     )}
@@ -425,7 +443,7 @@ const PharmacyDashboard = ({ account }) => {
                                         <tr key={i} style={{ borderBottom: '1px solid rgba(255,255,255,0.05)' }}>
                                             <td style={{ padding: '0.8rem 0.5rem', fontFamily: 'monospace' }}>{log.blockchainId}</td>
                                             <td style={{ padding: '0.8rem 0.5rem' }}>{log.patientName}</td>
-                                            <td style={{ padding: '0.8rem 0.5rem' }}>{log.medicines.map(m => m.name).join(', ')}</td>
+                                            <td style={{ padding: '0.8rem 0.5rem' }}>{log.medicines.map(m => m.name || m.medicineName || 'Unknown').join(', ')}</td>
                                             <td style={{ padding: '0.8rem 0.5rem' }}>{new Date(log.dispensedAt).toLocaleDateString()}</td>
                                         </tr>
                                     ))}
