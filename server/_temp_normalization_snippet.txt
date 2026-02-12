@@ -1,0 +1,35 @@
+        // 2. Normalize & Validate Prescription Medicine Data
+        // Normalize medicine data to handle field name variations
+        const normalizedMedicines = [];
+        
+        for (let i = 0; i < log.medicines.length; i++) {
+            const normalized = normalizeMedicineData(log.medicines[i], i);
+            
+            // CRITICAL VALIDATION: Ensure medicine name exists after normalization
+            if (!normalized.name) {
+                console.error('❌ Complete-Dispense Error: Medicine name missing', { 
+                    prescriptionId: blockchainId, 
+                    medicineIndex: i, 
+                    originalMedicine: log.medicines[i],
+                    normalizedMedicine: normalized
+                });
+                return res.status(400).json({
+                    success: false,
+                    message: `Invalid prescription data: Medicine #${i + 1} has no identifiable name (checked: name, medicineName, drugName, drug). Cannot dispense.`
+                });
+            }
+            
+            // Validate quantity
+            if (isNaN(normalized.quantity) || normalized.quantity <= 0) {
+                console.error('❌ Complete-Dispense Error: Invalid quantity', { 
+                    prescriptionId: blockchainId, 
+                    medicine: normalized
+                });
+                return res.status(400).json({
+                    success: false,
+                    message: `Invalid prescription data: Medicine "${normalized.name}" has invalid quantity. Cannot dispense.`
+                });
+            }
+            
+            normalizedMedicines.push(normalized);
+        }

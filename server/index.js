@@ -1,4 +1,33 @@
+// ============================================
+// STEP 1: LOAD ENVIRONMENT VARIABLES
+// ============================================
 require('dotenv').config();
+
+// ============================================
+// STEP 2: VALIDATE CRITICAL ENVIRONMENT VARS
+// ============================================
+const requiredEnvVars = ['MONGO_URI', 'JWT_SECRET'];
+const missingVars = requiredEnvVars.filter(varName => !process.env[varName]);
+
+if (missingVars.length > 0) {
+    console.error('❌ FATAL: Missing required environment variables:');
+    missingVars.forEach(varName => console.error(`   - ${varName}`));
+    console.error('\n💡 Create a .env file in the server directory with these variables.');
+    console.error('   See .env.example for reference.\n');
+    process.exit(1);
+}
+
+// Validate MONGO_URI is a non-empty string
+if (typeof process.env.MONGO_URI !== 'string' || process.env.MONGO_URI.trim() === '') {
+    console.error('❌ FATAL: MONGO_URI must be a non-empty string');
+    process.exit(1);
+}
+
+console.log('✅ Environment variables loaded and validated');
+
+// ============================================
+// STEP 3: INITIALIZE EXPRESS APP
+// ============================================
 const express = require('express');
 const mongoose = require('mongoose');
 const cors = require('cors');
@@ -7,57 +36,65 @@ const app = express();
 app.use(cors());
 app.use(express.json());
 
-const prescriptionRoutes = require('./routes/prescriptions');
-const { GoogleGenerativeAI } = require('@google/generative-ai');
+// ============================================
+// STEP 4: CONNECT TO MONGODB (BEFORE ROUTES)
+// ============================================
+const MONGO_URI = process.env.MONGO_URI.trim();
 
-const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
+console.log('🔄 Connecting to MongoDB...');
 
-app.use('/api/prescriptions', prescriptionRoutes);
+mongoose.connect(MONGO_URI, {
+    serverSelectionTimeoutMS: 5000, // Fail fast if can't connect
+    bufferCommands: false, // Disable buffering to fail immediately on connection issues
+})
+    .then(() => {
+        console.log('✅ MongoDB Connected Successfully');
+        console.log(`   Database: ${mongoose.connection.name}`);
 
-app.post('/api/parse-prescription', async (req, res) => {
-    try {
-        const { transcript } = req.body;
-        if (!transcript) return res.status(400).json({ success: false, error: 'No transcript provided' });
+        // ============================================
+        // STEP 5: REGISTER ROUTES (AFTER DB CONNECTED)
+        // ============================================
+        const prescriptionRoutes = require('./routes/prescriptions');
+        const analyticsRoutes = require('./routes/analytics');
+        const inventoryRoutes = require('./routes/inventory');
+        const authRoutes = require('./routes/auth');
+        const patientRoutes = require('./routes/patient');
 
-        const model = genAI.getGenerativeModel({ model: "gemini-1.5-flash" });
-        const prompt = `
-            You are a helpful medical assistant. Extract the following details from the doctor's spoken text:
-            - patientName (String)
-            - age (Number or String)
-            - medicine (String, include dosage if present)
-            - quantity (Number)
-            - notes (String summary of instructions)
+        app.use('/api/prescriptions', prescriptionRoutes);
+        app.use('/api/analytics', analyticsRoutes);
+        app.use('/api/inventory', inventoryRoutes);
+        app.use('/api/auth', authRoutes);
+        app.use('/api/patient', patientRoutes);
 
-            Return ONLY a valid JSON object. Do not use Markdown code blocks. Keys: patientName, age, medicine, quantity, notes.
-            If a value is not found, set it to null.
-            
-            Text: "${transcript}"
-        `;
+        console.log('✅ API Routes Registered');
 
-        const result = await model.generateContent(prompt);
-        const response = await result.response;
-        let text = response.text();
+        // ============================================
+        // STEP 6: START BACKGROUND SERVICES
+        // ============================================
+        const startExpiryJob = require('./cron/expiryJob');
+        const startBlockchainListener = require('./services/blockchainListener');
 
-        // Cleanup if model returns markdown
-        text = text.replace(/```json/g, '').replace(/```/g, '').trim();
+        startExpiryJob();
+        startBlockchainListener();
 
-        const data = JSON.parse(text);
-        res.json({ success: true, data });
+        console.log('✅ Background Services Started');
 
-    } catch (error) {
-        console.error('AI Parse Error:', error);
-        res.status(500).json({ success: false, error: error.message });
-    }
-});
-
-app.get('/', (req, res) => {
-    res.send('Blockchain Prescription API is running');
-});
-
-// MongoDB Connection
-mongoose.connect(process.env.MONGO_URI || 'mongodb://localhost:27017/blockchain-prescription')
-    .then(() => console.log('MongoDB Connected'))
-    .catch(err => console.error('MongoDB Connection Error:', err));
-
-const PORT = process.env.PORT || 5000;
-app.listen(PORT, () => console.log(`Server running on port ${PORT}`));
+        // ============================================
+        // STEP 7: START SERVER (ONLY AFTER DB READY)
+        // ============================================
+        const PORT = process.env.PORT || 5000;
+        app.listen(PORT, () => {
+            console.log(`\n🚀 Server running on port ${PORT}`);
+            console.log(`   MongoDB: Connected`);
+            console.log(`   Status: Ready to accept requests\n`);
+        });
+    })
+    .catch(err => {
+        console.error('❌ FATAL: MongoDB Connection Failed');
+        console.error('   Error:', err.message);
+        console.error('\n💡 Troubleshooting:');
+        console.error('   1. Ensure MongoDB is running (mongod service)');
+        console.error('   2. Check MONGO_URI in .env file');
+        console.error('   3. Verify network connectivity\n');
+        process.exit(1);
+    });
