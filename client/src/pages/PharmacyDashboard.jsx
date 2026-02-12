@@ -78,22 +78,26 @@ const PharmacyDashboard = ({ account }) => {
                 const contract = new ethers.Contract(CONTRACT_ADDRESS, ABI, provider);
 
                 const formattedId = ethers.encodeBytes32String(searchId);
-                const p = await contract.getPrescription(formattedId);
+                const result = await contract.verifyPrescription(formattedId);
+                // verifyPrescription returns (bool exists, uint8 status, uint256 remaining)
+                const exists = result[0];
+                const onChainStatus = Number(result[1]);
+                const remaining = Number(result[2]);
 
-                if (p.issuer === ethers.ZeroAddress) {
+                if (!exists) {
                     // Blockchain record not found — check DB sync flag
                     const dbSynced = res.data.data.blockchainSynced;
                     if (dbSynced) {
-                        // DB says synced but chain doesn't have it — genuine issue
-                        setStatus('⚠️ Blockchain record mismatch. Prescription may need re-sync.');
+                        setStatus('⚠️ Blockchain record mismatch (possible Hardhat restart). Prescription may need re-sync.');
                     } else {
                         setStatus('⏳ Pending Blockchain Confirmation — prescription is viewable but cannot be dispensed yet.');
                     }
                     setChainData({ status: 'PENDING_SYNC', pendingSync: true });
                 } else {
                     setChainData({
-                        status: getStatusString(Number(p.status)),
-                        issuer: p.issuer,
+                        status: getStatusString(onChainStatus),
+                        issuer: res.data.data.doctorAddress,
+                        remaining,
                         pendingSync: false
                     });
                     setStatus('');

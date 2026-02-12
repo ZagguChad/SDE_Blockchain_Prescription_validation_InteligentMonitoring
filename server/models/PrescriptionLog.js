@@ -21,6 +21,9 @@ const PrescriptionSchema = new mongoose.Schema({
     maxUsage: { type: Number, default: 1 }, // New
     usageCount: { type: Number, default: 0 }, // New
     patientHash: { type: String }, // New: Store on-chain hash for verification
+    blockchainSynced: { type: Boolean, default: false }, // True after tx receipt.status === 1
+    txHash: { type: String, default: null }, // Transaction hash from blockchain
+    blockNumber: { type: Number, default: null }, // Block number of confirmed tx
     status: { type: String, enum: ['CREATED', 'ACTIVE', 'USED', 'EXPIRED', 'DISPENSED'], default: 'ACTIVE' },
     blockchainSynced: { type: Boolean, default: false },
     txHash: { type: String },

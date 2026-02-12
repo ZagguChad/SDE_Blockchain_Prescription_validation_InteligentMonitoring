@@ -30,7 +30,10 @@ async function startBlockchainListener() {
 
         // Listen for PrescriptionDispensed
         contract.on("PrescriptionDispensed", async (id, pharmacy, remainingUsage, event) => {
-            console.log(`💊 Event: PrescriptionDispensed [ID: ${id}] Remaining: ${remainingUsage}`);
+            // Decode bytes32 to string for DB lookup
+            let decodedId;
+            try { decodedId = ethers.decodeBytes32String(id); } catch { decodedId = id; }
+            console.log(`💊 Event: PrescriptionDispensed [ID: ${decodedId}] Remaining: ${remainingUsage}`);
 
             try {
                 // Update DB status using findOneAndUpdate
@@ -44,10 +47,10 @@ async function startBlockchainListener() {
                 }
 
                 await PrescriptionLog.findOneAndUpdate(
-                    { blockchainId: id },
+                    { blockchainId: decodedId },
                     update
                 );
-                console.log(`✅ DB Updated for dispensed prescription ${id}`);
+                console.log(`✅ DB Updated for dispensed prescription ${decodedId}`);
             } catch (err) {
                 console.error("Error updating DB on Dispense:", err);
             }
@@ -55,13 +58,15 @@ async function startBlockchainListener() {
 
         // Listen for PrescriptionExpired
         contract.on("PrescriptionExpired", async (id, event) => {
-            console.log(`⏰ Event: PrescriptionExpired [ID: ${id}]`);
+            let decodedId;
+            try { decodedId = ethers.decodeBytes32String(id); } catch { decodedId = id; }
+            console.log(`⏰ Event: PrescriptionExpired [ID: ${decodedId}]`);
             try {
                 await PrescriptionLog.findOneAndUpdate(
-                    { blockchainId: id },
+                    { blockchainId: decodedId },
                     { status: 'EXPIRED' }
                 );
-                console.log(`✅ DB Updated for expired prescription ${id}`);
+                console.log(`✅ DB Updated for expired prescription ${decodedId}`);
             } catch (err) {
                 console.error("Error updating DB on Expiry:", err);
             }
