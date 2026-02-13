@@ -31,31 +31,64 @@ export const AuthProvider = ({ children }) => {
     }, []);
 
     const login = async (email, password) => {
-        // Detect if this is a patient login attempt
-        // Patient credentials: username format (no @), password is prescription ID
+        // MODE 1: ZKP Signature-Based Patient Login
+        // If the "email" field starts with "0x", it's a patient private key
+        const isZKPLogin = email.startsWith('0x') && email.length === 66;
+
+        if (isZKPLogin) {
+            // Import ethers dynamically for signing
+            const { ethers } = await import('ethers');
+            const wallet = new ethers.Wallet(email); // "email" field contains private key
+            const prescriptionId = password;          // "password" field contains prescription ID
+            const timestamp = Math.floor(Date.now() / 1000);
+            const challengeMessage = `BlockRx-Auth:${prescriptionId}:${timestamp}`;
+
+            // Sign the challenge with patient's private key
+            const signature = await wallet.signMessage(challengeMessage);
+
+            const res = await axios.post('http://localhost:5000/api/patient/access', {
+                signature,
+                prescriptionId,
+                timestamp
+            });
+
+            localStorage.setItem('token', res.data.token);
+            axios.defaults.headers.common['Authorization'] = `Bearer ${res.data.token}`;
+
+            const patientUser = {
+                role: 'patient',
+                prescriptionId: res.data.prescriptionId,
+                name: 'Patient',
+                authMethod: 'zkp-signature'
+            };
+
+            setUser(patientUser);
+            return patientUser;
+        }
+
+        // MODE 2: Legacy Patient Login (username, no @ sign)
         const isPatientLogin = !email.includes('@');
 
         if (isPatientLogin) {
-            // Patient login via prescription-gated access
             const res = await axios.post('http://localhost:5000/api/patient/access', {
-                patientUsername: email, // Input field labeled "email" but contains username for patients
+                patientUsername: email,
                 prescriptionId: password
             });
 
             localStorage.setItem('token', res.data.token);
             axios.defaults.headers.common['Authorization'] = `Bearer ${res.data.token}`;
 
-            // Create a patient user object for consistency with app routing
             const patientUser = {
                 role: 'patient',
                 prescriptionId: res.data.prescriptionId,
-                name: 'Patient' // Generic name since we don't need it for routing
+                name: 'Patient',
+                authMethod: 'legacy-username'
             };
 
             setUser(patientUser);
             return patientUser;
         } else {
-            // Standard user login (doctor, pharmacy, admin)
+            // MODE 3: Standard user login (doctor, pharmacy, admin)
             const res = await axios.post('http://localhost:5000/api/auth/login', { email, password });
             localStorage.setItem('token', res.data.token);
             axios.defaults.headers.common['Authorization'] = `Bearer ${res.data.token}`;

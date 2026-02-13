@@ -19,6 +19,7 @@ const PharmacyDashboard = ({ account }) => {
     const [activityLog, setActivityLog] = useState([]);
 
     const [invoiceData, setInvoiceData] = useState(null);
+    const [hashVerified, setHashVerified] = useState(null); // ZKP Phase 2: null = not checked, true/false = result
 
     // Inventory Tab State
     const [inventory, setInventory] = useState([]);
@@ -30,10 +31,14 @@ const PharmacyDashboard = ({ account }) => {
         price: '',
         expiryDate: ''
     });
+    const [inventoryIntegrity, setInventoryIntegrity] = useState(null); // ZKP Phase 3
 
     useEffect(() => {
         if (activeTab === 'dispense') fetchActivity();
-        if (activeTab === 'inventory') fetchInventory();
+        if (activeTab === 'inventory') {
+            fetchInventory();
+            fetchInventoryIntegrity();
+        }
     }, [activeTab]);
 
     const fetchActivity = async () => {
@@ -54,12 +59,23 @@ const PharmacyDashboard = ({ account }) => {
         }
     };
 
+    const fetchInventoryIntegrity = async () => {
+        try {
+            const res = await axios.get('http://localhost:5000/api/inventory/verify-integrity');
+            setInventoryIntegrity(res.data);
+        } catch (error) {
+            console.error("Integrity check failed:", error);
+            setInventoryIntegrity({ valid: false, error: true });
+        }
+    };
+
     const handleSearch = async () => {
         if (!searchId) return;
         setLoading(true);
         setStatus('Fetching details...');
         setData(null);
         setChainData(null);
+        setHashVerified(null); // Reset hash verification on new search
 
         try {
             // 1. Get Off-chain Metadata
@@ -144,7 +160,9 @@ const PharmacyDashboard = ({ account }) => {
                 if (!validateRes.data.success) {
                     throw new Error(validateRes.data.message || "Validation failed");
                 }
-                console.log("✅ Backend Validation Passed");
+                // ZKP Phase 2: Capture hash verification result
+                setHashVerified(validateRes.data.hashVerified === true);
+                console.log("✅ Backend Validation Passed", { hashVerified: validateRes.data.hashVerified });
             } catch (validationErr) {
                 console.error("Validation Error:", validationErr);
                 const serverMsg = validationErr.response?.data?.message || validationErr.message;
@@ -324,6 +342,12 @@ const PharmacyDashboard = ({ account }) => {
                                     <span className={`badge ${chainData.status === 'ACTIVE' ? 'badge-success' : 'badge-error'}`}>
                                         {chainData.status}
                                     </span>
+                                    {hashVerified !== null && (
+                                        <span className={`badge ${hashVerified ? 'badge-success' : 'badge-error'}`}
+                                            title={hashVerified ? 'On-chain hash matches off-chain data' : 'WARNING: Data integrity mismatch detected'}>
+                                            {hashVerified ? '✅ Hash Verified' : '❌ Hash Mismatch'}
+                                        </span>
+                                    )}
                                 </div>
                             </div>
 
@@ -459,6 +483,23 @@ const PharmacyDashboard = ({ account }) => {
             ) : (
                 // --- INVENTORY VIEW ---
                 <div className="grid-layout">
+                    {/* ZKP Phase 3: Inventory Integrity Indicator */}
+                    <div className="card col-span-12" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '1rem 1.5rem' }}>
+                        <div>
+                            <h4 style={{ margin: 0 }}>🔒 Inventory Integrity</h4>
+                            <p className="text-sm text-muted" style={{ margin: 0 }}>On-chain Merkle root verification</p>
+                        </div>
+                        {inventoryIntegrity ? (
+                            <span className={`badge ${inventoryIntegrity.valid ? 'badge-success' : 'badge-error'}`}
+                                title={inventoryIntegrity.valid ? `Root: ${inventoryIntegrity.currentRoot?.substring(0, 10)}... (${inventoryIntegrity.batchCount} batches)` : 'Inventory state does not match on-chain anchor'}
+                                style={{ fontSize: '0.9rem', padding: '0.4rem 0.8rem' }}>
+                                {inventoryIntegrity.valid ? '✅ Synced with Blockchain' : '⚠️ Out of Sync'}
+                            </span>
+                        ) : (
+                            <span className="badge" style={{ opacity: 0.5 }}>Checking...</span>
+                        )}
+                    </div>
+
                     {/* Add Batch Form */}
                     <div className="card col-span-4">
                         <h3>📦 Add Medicine Batch</h3>

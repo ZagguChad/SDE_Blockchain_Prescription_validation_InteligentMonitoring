@@ -24,10 +24,14 @@ const PrescriptionSchema = new mongoose.Schema({
     blockchainSynced: { type: Boolean, default: false }, // True after tx receipt.status === 1
     txHash: { type: String, default: null }, // Transaction hash from blockchain
     blockNumber: { type: Number, default: null }, // Block number of confirmed tx
+    // ZKP Phase 1: Self-Sovereign Patient Identity
+    patientCommitment: { type: String, default: null }, // keccak256(patientAddress || DOB) — stored on-chain
+    patientPublicKey: { type: String, default: null },   // Encrypted ECDSA public key
+    patientAddress: { type: String, default: null },      // Derived patient ECDSA address (for commitment verify)
+    // ZKP Phase 2: Hash Integrity Verification
+    hashVerified: { type: Boolean, default: false },      // True after on-chain hash match at dispense
+    hashVerifiedAt: { type: Date, default: null },        // When hash was verified
     status: { type: String, enum: ['CREATED', 'ACTIVE', 'USED', 'EXPIRED', 'DISPENSED'], default: 'ACTIVE' },
-    blockchainSynced: { type: Boolean, default: false },
-    txHash: { type: String },
-    blockNumber: { type: Number },
     dispensedAt: { type: Date },
     issuedAt: { type: Date, default: Date.now },
     // Part 3: Billing & Invoice

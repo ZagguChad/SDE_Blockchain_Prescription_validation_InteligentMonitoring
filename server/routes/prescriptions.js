@@ -10,6 +10,10 @@ const { generateProtectedPDF, generateInvoicePDF } = require('../utils/pdfGenera
 const { encryptPDF } = require('../utils/pdfEncryptor');
 const { sendPrescriptionEmail, sendInvoiceEmail } = require('../utils/emailService');
 const { normalizePrescriptionMedicines } = require('../utils/normalizeHelper');
+const { generatePatientKeypair, createAddressCommitment } = require('../utils/patientCrypto');
+const { verifyOnChainHashes } = require('../utils/hashVerifier');
+const { anchorInventoryRoot } = require('../utils/inventoryMerkle');
+const { canonicalizeMedicines } = require('../utils/canonicalPrescriptionHash');
 
 const { protect, authorize } = require('../middleware/authMiddleware');
 const User = require('../models/User');
@@ -110,6 +114,11 @@ router.post('/', protect, authorize('doctor'), async (req, res) => {
         const { generatePatientUsername } = require('../utils/username');
         const patientUsername = generatePatientUsername(patientName, blockchainId);
 
+        // 3b. Generate Patient Keypair (ZKP Phase 1 — Self-Sovereign Identity)
+        const patientKeypair = generatePatientKeypair();
+        const patientCommitment = createAddressCommitment(patientKeypair.address, patientDOB);
+        console.log(`🔐 Patient keypair generated for ${blockchainId}, commitment: ${patientCommitment.substring(0, 10)}...`);
+
         // 4. Save to DB
         const savedLog = await PrescriptionLog.findOneAndUpdate(
             { blockchainId },
@@ -129,6 +138,9 @@ router.post('/', protect, authorize('doctor'), async (req, res) => {
                 maxUsage: maxUsage || 1,
                 usageCount: 0,
                 patientHash,
+                patientCommitment,
+                patientPublicKey: encrypt(patientKeypair.publicKey),
+                patientAddress: patientKeypair.address,
                 blockchainSynced: blockchainSynced || false,
                 txHash: txHash || null,
                 blockNumber: blockNumber || null,
@@ -158,7 +170,8 @@ router.post('/', protect, authorize('doctor'), async (req, res) => {
                 notes,
                 diagnosis,
                 expiryDate,
-                doctorAddress
+                doctorAddress,
+                patientPrivateKey: patientKeypair.privateKey  // ZKP Phase 1: embed in QR
             }, pdfPassword);
             console.log(`📄 PDF generated (${unencryptedPdf.length} bytes)`);
 
@@ -195,8 +208,28 @@ router.post('/', protect, authorize('doctor'), async (req, res) => {
                 username: patientUsername,
                 password: blockchainId
             },
+            patientCommitment: patientCommitment,  // ZKP Phase 1
             emailSent: emailResult.success,
             emailError: emailResult.error || null
+        });
+
+        // ZKP Phase 1: Set patient commitment on-chain (async, non-blocking)
+        setImmediate(async () => {
+            try {
+                const { ethers } = require('ethers');
+                const contractInfo = require('../contractInfo.json');
+                const provider = new ethers.JsonRpcProvider(process.env.BLOCKCHAIN_RPC || 'http://127.0.0.1:8545');
+                const signer = new ethers.Wallet(process.env.DEPLOYER_PRIVATE_KEY || '0xac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80', provider);
+                const contract = new ethers.Contract(contractInfo.address, contractInfo.abi, signer);
+
+                const idBytes = ethers.encodeBytes32String(blockchainId);
+                const tx = await contract.setPatientCommitment(idBytes, patientCommitment);
+                await tx.wait();
+                console.log(`✅ Patient commitment set on-chain for ${blockchainId}`);
+            } catch (commitErr) {
+                // Non-critical: commitment is also stored in DB
+                console.warn(`⚠️ On-chain commitment failed for ${blockchainId}: ${commitErr.message}`);
+            }
         });
     } catch (error) {
         console.error("❌ Prescription Save Error:", error);
@@ -325,6 +358,30 @@ router.post('/validate-dispense', protect, authorize('pharmacy'), async (req, re
         if (!log) return res.status(404).json({ success: false, message: 'Prescription not found' });
         if (log.status === 'DISPENSED') return res.status(400).json({ success: false, message: 'Already dispensed' });
 
+        // ZKP Phase 2: Hash Integrity Verification (non-blocking warning in validate)
+        let hashIntegrity = { valid: false, patientMatch: false, medMatch: false };
+        try {
+            const plainPatientName = decrypt(log.patientName);
+            // Build plain medicines — canonical utility handles key order/sorting
+            const plainMedicines = log.medicines.map(m => {
+                const medObj = m.toObject ? m.toObject() : m;
+                return {
+                    name: medObj.name || '',
+                    dosage: medObj.dosage || '',
+                    quantity: medObj.quantity,
+                    instructions: decrypt(medObj.instructions || '')
+                };
+            });
+            hashIntegrity = await verifyOnChainHashes(blockchainId, plainPatientName, log.patientAge, plainMedicines);
+            if (!hashIntegrity.valid) {
+                console.warn(`⚠️ Hash integrity check FAILED for ${blockchainId}:`, hashIntegrity.details);
+            } else {
+                console.log(`✅ Hash integrity verified for ${blockchainId}`);
+            }
+        } catch (hashErr) {
+            console.warn(`⚠️ Hash verification skipped for ${blockchainId}: ${hashErr.message}`);
+        }
+
         // Normalize medicines — name is stored as PLAIN TEXT (not encrypted)
         // Only instructions are encrypted
         let normalizedMedicines;
@@ -373,7 +430,16 @@ router.post('/validate-dispense', protect, authorize('pharmacy'), async (req, re
             }
         }
 
-        res.json({ success: true, valid: true, message: 'Validation successful' });
+        res.json({
+            success: true,
+            valid: true,
+            message: 'Validation successful',
+            hashVerified: hashIntegrity.valid,
+            hashDetails: hashIntegrity.valid ? undefined : {
+                patientMatch: hashIntegrity.patientMatch,
+                medMatch: hashIntegrity.medMatch
+            }
+        });
     } catch (error) {
         console.error('❌ Validate-Dispense Error:', error.message, { stack: error.stack });
         res.status(500).json({ success: false, error: error.message });
@@ -408,6 +474,44 @@ router.post('/complete-dispense', protect, authorize('pharmacy'), async (req, re
 
         if (!log.medicines || log.medicines.length === 0) {
             return res.status(400).json({ success: false, message: 'Prescription contains no medicines' });
+        }
+
+        // ── STEP 1b: ZKP Phase 2 — Hash Integrity Verification (HARD BLOCK) ──
+        try {
+            const plainPatientName = decrypt(log.patientName);
+            // Build plain medicines — canonical utility handles key order/sorting
+            const plainMedicines = log.medicines.map(m => {
+                const medObj = m.toObject ? m.toObject() : m;
+                return {
+                    name: medObj.name || '',
+                    dosage: medObj.dosage || '',
+                    quantity: medObj.quantity,
+                    instructions: decrypt(medObj.instructions || '')
+                };
+            });
+            const hashResult = await verifyOnChainHashes(blockchainId, plainPatientName, log.patientAge, plainMedicines);
+
+            if (!hashResult.valid) {
+                console.error(`🚫 DISPENSE BLOCKED — Hash integrity FAILED for ${blockchainId}`, hashResult.details);
+                return res.status(403).json({
+                    success: false,
+                    message: 'Prescription data integrity check failed. The off-chain data does not match the on-chain hash anchors. This prescription may have been tampered with.',
+                    code: 'DATA_TAMPERED',
+                    details: {
+                        patientMatch: hashResult.patientMatch,
+                        medMatch: hashResult.medMatch
+                    }
+                });
+            }
+
+            // Mark hash as verified
+            log.hashVerified = true;
+            log.hashVerifiedAt = new Date();
+            console.log(`✅ Hash integrity verified for ${blockchainId} — proceeding with dispense`);
+        } catch (hashErr) {
+            // If blockchain is unreachable, log warning but allow dispense
+            // (don't block legitimate dispenses due to infra issues)
+            console.warn(`⚠️ Hash verification skipped (blockchain unavailable): ${hashErr.message}`);
         }
 
         // ── STEP 2: Normalize All Medicine Data ──
@@ -582,6 +686,9 @@ router.post('/complete-dispense', protect, authorize('pharmacy'), async (req, re
         await log.save();
 
         console.log(`✅ Prescription ${blockchainId} dispensed. Invoice: $${totalCost.toFixed(2)} (${dispenseId})`);
+
+        // ZKP Phase 3: Anchor updated Merkle root after stock changes (awaited after DB commit)
+        try { await anchorInventoryRoot(); } catch (e) { console.warn('⚠️ Inventory root anchor failed:', e.message); }
 
         // ── STEP 7: Generate Invoice PDF & Email (non-blocking) ──
         let invoicePdfBase64 = null;

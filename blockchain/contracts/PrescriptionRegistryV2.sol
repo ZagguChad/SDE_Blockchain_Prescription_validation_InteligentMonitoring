@@ -4,6 +4,7 @@ pragma solidity ^0.8.19;
 /**
  * @title PrescriptionRegistryV2
  * @dev Upgraded Smart Contract for Secure Digital Prescription System
+ * V2.1: Added patientCommitment for self-sovereign patient ownership (ZKP Phase 1).
  * Includes secure lifecycle management, RBAC, double-usage prevention, and audit trails.
  */
 contract PrescriptionRegistryV2 {
@@ -12,16 +13,18 @@ contract PrescriptionRegistryV2 {
 
     struct Prescription {
         bytes32 id;
-        address issuer;          // Doctor who created it
-        address pharmacy;        // Pharmacy who last dispensed it (or 0x0 if not used)
-        address lastUpdater;      // Address that last modified the record
-        bytes32 prescriptionHash; // Hash of off-chain details (patient, meds, diagnosis) - replaces raw data
-        uint256 quantity;         // Total quantity of meds (informational/validation)
-        uint256 usageCount;       // Number of times dispensed
-        uint256 maxUsage;         // Max allowed dispensations
-        uint256 expiryDate;       // Unix timestamp of expiry
-        Status status;            // Current lifecycle state
-        uint256 timestamp;        // Creation timestamp
+        address issuer;              // Doctor who created it
+        address pharmacy;            // Pharmacy who last dispensed it (or 0x0)
+        address lastUpdater;         // Address that last modified the record
+        bytes32 patientHash;         // keccak256(patientName || age)
+        bytes32 medicationHash;      // keccak256(medicines JSON)
+        bytes32 patientCommitment;   // NEW: keccak256(patientAddress || DOB) — self-sovereign identity
+        uint256 quantity;            // Total quantity of meds
+        uint256 usageCount;          // Number of times dispensed
+        uint256 maxUsage;            // Max allowed dispensations
+        uint256 expiryDate;          // Unix timestamp of expiry
+        Status status;               // Current lifecycle state
+        uint256 timestamp;           // Creation timestamp
     }
 
     // Storage
@@ -32,11 +35,12 @@ contract PrescriptionRegistryV2 {
     address public owner;
 
     // Events
-    event PrescriptionCreated(bytes32 indexed id, address indexed issuer, bytes32 prescriptionHash);
+    event PrescriptionCreated(bytes32 indexed id, address indexed issuer, bytes32 patientHash);
     event PrescriptionDispensed(bytes32 indexed id, address indexed pharmacy, uint256 remainingUsage);
-    event PrescriptionUsed(bytes32 indexed id, address indexed pharmacy); // Fired when fully used
+    event PrescriptionUsed(bytes32 indexed id, address indexed pharmacy);
     event PrescriptionExpired(bytes32 indexed id);
-    event PrescriptionVerified(bytes32 indexed id, address indexed verifier, Status status); // For audit trail
+    event PrescriptionVerified(bytes32 indexed id, address indexed verifier, Status status);
+    event PatientOwnershipVerified(bytes32 indexed id, bytes32 commitment);
     event RoleGranted(bytes32 role, address indexed account);
     event BatchRegistered(string batchId, bytes32 hash, address indexed pharmacy);
 
@@ -75,16 +79,18 @@ contract PrescriptionRegistryV2 {
     // --- Prescription Lifecycle ---
 
     /**
-     * @dev Issues a new prescription.
-     * @param _id Unique ID of the prescription (generated off-chain)
-     * @param _prescriptionHash Hash of the critical prescription data (integrity check)
-     * @param _quantity Total quantity prescribed (optional, can be 0 if handled off-chain)
+     * @dev Issues a new prescription with patient commitment for self-sovereign identity.
+     * @param _id Unique ID of the prescription
+     * @param _patientHash Hash of patient identity data (name + age)
+     * @param _medicationHash Hash of medication data
+     * @param _quantity Total quantity prescribed
      * @param _expiryDate Expiry timestamp
-     * @param _maxUsage How many times it can be dispensed (e.g., refills)
+     * @param _maxUsage How many times it can be dispensed
      */
     function issuePrescription(
         bytes32 _id, 
-        bytes32 _prescriptionHash, 
+        bytes32 _patientHash,
+        bytes32 _medicationHash,
         uint256 _quantity, 
         uint256 _expiryDate,
         uint256 _maxUsage
@@ -98,7 +104,9 @@ contract PrescriptionRegistryV2 {
             issuer: msg.sender,
             pharmacy: address(0),
             lastUpdater: msg.sender,
-            prescriptionHash: _prescriptionHash,
+            patientHash: _patientHash,
+            medicationHash: _medicationHash,
+            patientCommitment: bytes32(0), // Set separately via setPatientCommitment
             quantity: _quantity,
             usageCount: 0,
             maxUsage: _maxUsage,
@@ -107,41 +115,62 @@ contract PrescriptionRegistryV2 {
             timestamp: block.timestamp
         });
 
-        emit PrescriptionCreated(_id, msg.sender, _prescriptionHash);
+        emit PrescriptionCreated(_id, msg.sender, _patientHash);
+    }
+
+    /**
+     * @dev Set the patient commitment for a prescription.
+     * Can only be called by the issuing doctor, and only once (commitment is immutable).
+     * @param _id Prescription ID
+     * @param _commitment keccak256(patientAddress || DOB)
+     */
+    function setPatientCommitment(bytes32 _id, bytes32 _commitment) external onlyDoctor {
+        require(prescriptions[_id].id != bytes32(0), "Invalid ID");
+        require(prescriptions[_id].issuer == msg.sender, "Not the issuer");
+        require(prescriptions[_id].patientCommitment == bytes32(0), "Commitment already set");
+        require(_commitment != bytes32(0), "Empty commitment");
+
+        prescriptions[_id].patientCommitment = _commitment;
+    }
+
+    /**
+     * @dev Verify patient ownership by checking commitment match.
+     * Returns true if the provided commitment matches the stored one.
+     * @param _id Prescription ID
+     * @param _commitment Commitment to verify against
+     */
+    function verifyPatientOwnership(bytes32 _id, bytes32 _commitment) external view returns (bool) {
+        if (prescriptions[_id].id == bytes32(0)) return false;
+        if (prescriptions[_id].patientCommitment == bytes32(0)) return false;
+        return prescriptions[_id].patientCommitment == _commitment;
     }
 
     /**
      * @dev Process a dispensation for a prescription.
-     * Checks expiry, usage limits, and active status.
-     * Updates usage count and status.
      */
     function dispensePrescription(bytes32 _id) external onlyPharmacy {
         require(prescriptions[_id].id != bytes32(0), "Invalid ID");
         
         Prescription storage p = prescriptions[_id];
 
-        // 1. Check Expiry first
         if (block.timestamp > p.expiryDate) {
             if (p.status != Status.EXPIRED) {
                 p.status = Status.EXPIRED;
                 p.lastUpdater = msg.sender;
                 emit PrescriptionExpired(_id);
             }
-            return; // Stop execution but allow state change to persist
+            return;
         }
 
-        // 2. Validate State
         require(p.status == Status.ACTIVE, "Prescription not active");
         require(p.usageCount < p.maxUsage, "Usage limit reached");
 
-        // 3. Update State
         p.usageCount++;
-        p.pharmacy = msg.sender; // Record who dispensed it
+        p.pharmacy = msg.sender;
         p.lastUpdater = msg.sender;
 
         emit PrescriptionDispensed(_id, msg.sender, p.maxUsage - p.usageCount);
 
-        // 4. Transition to USED only if max usage reached
         if (p.usageCount >= p.maxUsage) {
             p.status = Status.USED;
             emit PrescriptionUsed(_id, msg.sender);
@@ -149,9 +178,7 @@ contract PrescriptionRegistryV2 {
     }
 
     /**
-     * @dev Read-only helper to get status.
-     * Does NOT consume gas unless called in a transaction.
-     * Calculates derived status (e.g. checks expiry) without modifying state.
+     * @dev Read-only helper to get prescription status.
      */
     function verifyPrescription(bytes32 _id) external view returns (
         bool exists, 
@@ -177,9 +204,14 @@ contract PrescriptionRegistryV2 {
     }
 
     /**
-     * @dev Explicitly verify and LOG the verification event on-chain.
-     * Useful for auditing who checked a prescription and when.
-     * COSTS GAS.
+     * @dev Get the patient commitment for a prescription.
+     */
+    function getPatientCommitment(bytes32 _id) external view returns (bytes32) {
+        return prescriptions[_id].patientCommitment;
+    }
+
+    /**
+     * @dev Explicitly verify and LOG the verification event on-chain. COSTS GAS.
      */
     function verifyAndLog(bytes32 _id) external onlyPharmacy {
          require(prescriptions[_id].id != bytes32(0), "Invalid ID");
@@ -187,17 +219,59 @@ contract PrescriptionRegistryV2 {
          Prescription memory p = prescriptions[_id];
          Status currentStatus = p.status;
          
-         // Update derived status if needed for the log
          if (currentStatus == Status.ACTIVE && block.timestamp > p.expiryDate) {
              currentStatus = Status.EXPIRED; 
-             // Note: We are not auto-updating storage here to save gas, just accurate logging.
-             // Auto-update happens on 'dispense' attempt.
          }
 
          emit PrescriptionVerified(_id, msg.sender, currentStatus);
     }
 
+    // --- Read helpers ---
+
+    /**
+     * @dev Verify prescription data integrity by comparing provided hashes with stored ones.
+     * Gas-free (view). Used by backend to detect DB tampering at dispense time.
+     * @param _id Prescription ID
+     * @param _patientHash Recomputed patient hash to verify
+     * @param _medHash Recomputed medication hash to verify
+     * @return patientMatch Whether patient hash matches
+     * @return medMatch Whether medication hash matches
+     */
+    function verifyPrescriptionHash(
+        bytes32 _id,
+        bytes32 _patientHash,
+        bytes32 _medHash
+    ) external view returns (bool patientMatch, bool medMatch) {
+        Prescription memory p = prescriptions[_id];
+        if (p.id == bytes32(0)) return (false, false);
+        return (p.patientHash == _patientHash, p.medicationHash == _medHash);
+    }
+
+    function getPrescription(bytes32 _id) external view returns (Prescription memory) {
+        return prescriptions[_id];
+    }
+
     // --- Pharmacy Inventory Extension ---
+
+    bytes32 public inventoryRoot; // Merkle root of all inventory batches
+
+    event InventoryRootUpdated(bytes32 indexed newRoot, address indexed updater);
+
+    /**
+     * @dev Update the inventory Merkle root. Called by pharmacy after inventory mutations.
+     * @param _root New Merkle root computed from all batches
+     */
+    function updateInventoryRoot(bytes32 _root) external onlyPharmacy {
+        inventoryRoot = _root;
+        emit InventoryRootUpdated(_root, msg.sender);
+    }
+
+    /**
+     * @dev Get the current inventory Merkle root.
+     */
+    function getInventoryRoot() external view returns (bytes32) {
+        return inventoryRoot;
+    }
 
     function registerMedicineBatch(string memory _batchId, bytes32 _batchHash) external onlyPharmacy {
         emit BatchRegistered(_batchId, _batchHash, msg.sender);

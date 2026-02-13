@@ -67,9 +67,21 @@ const DoctorDashboard = ({ account }) => {
         setStatusType('info');
 
         try {
-            // 1. Hash the data
-            const patientHash = ethers.keccak256(ethers.toUtf8Bytes(formData.patientName + formData.age));
-            const medHash = ethers.keccak256(ethers.toUtf8Bytes(JSON.stringify(formData.medicines)));
+            // 1. Hash the data (CANONICAL — must match server/utils/canonicalPrescriptionHash.js)
+            // Canonical medicine: {name, dosage, quantity(Number), instructions}, sorted by name
+            const canonicalMeds = formData.medicines
+                .map(m => ({
+                    name: String(m.name || '').trim(),
+                    dosage: String(m.dosage || '').trim(),
+                    quantity: Number(m.quantity) || 0,
+                    instructions: String(m.instructions || '').trim()
+                }))
+                .sort((a, b) => a.name.localeCompare(b.name));
+
+            const patientHash = ethers.keccak256(ethers.toUtf8Bytes(
+                String(formData.patientName).trim() + String(formData.age).trim()
+            ));
+            const medHash = ethers.keccak256(ethers.toUtf8Bytes(JSON.stringify(canonicalMeds)));
 
             // ID Generation
             const rawUniqueHash = ethers.id(`${formData.patientName}-${formData.age}-${Date.now()}`);

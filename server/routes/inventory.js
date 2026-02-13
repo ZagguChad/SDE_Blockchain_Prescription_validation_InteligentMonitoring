@@ -3,6 +3,7 @@ const router = express.Router();
 const Inventory = require('../models/Inventory');
 const { generateMedicineId } = require('../models/Inventory');
 const FraudAlert = require('../models/FraudAlert');
+const { anchorInventoryRoot, verifyInventoryRoot } = require('../utils/inventoryMerkle');
 
 // --- Helper: Normalize Medicine Data ---
 // Handles field name variations for robustness
@@ -76,6 +77,10 @@ router.post('/add', async (req, res) => {
         });
 
         await newBatch.save();
+
+        // ZKP Phase 3: Anchor updated Merkle root (awaited after DB commit)
+        try { await anchorInventoryRoot(); } catch (e) { console.warn('⚠️ Root anchor failed:', e.message); }
+
         res.status(201).json({ success: true, data: newBatch });
     } catch (error) {
         console.error('❌ Inventory Add Error:', error.message);
@@ -139,6 +144,10 @@ router.post('/dispense', async (req, res) => {
         }
 
         await batch.save();
+
+        // ZKP Phase 3: Anchor updated Merkle root (awaited after DB commit)
+        try { await anchorInventoryRoot(); } catch (e) { console.warn('⚠️ Root anchor failed:', e.message); }
+
         res.json({ success: true, message: 'Stock updated', currentStock: batch.quantityAvailable });
     } catch (error) {
         console.error('❌ Inventory Dispense Error:', error.message);
@@ -167,6 +176,9 @@ router.get('/alerts/expiry', async (req, res) => {
         if (expired.length > 0) {
             const expiredIds = expired.map(b => b._id);
             await Inventory.updateMany({ _id: { $in: expiredIds } }, { status: 'EXPIRED' });
+
+            // ZKP Phase 3: Anchor updated Merkle root after expiry changes
+            try { await anchorInventoryRoot(); } catch (e) { console.warn('⚠️ Root anchor failed:', e.message); }
         }
 
         res.json({ success: true, data: { expiringSoon, expired } });
@@ -316,9 +328,30 @@ router.post('/consume', async (req, res) => {
             });
         }
 
+        // ZKP Phase 3: Anchor updated Merkle root after consume
+        try { await anchorInventoryRoot(); } catch (e) { console.warn('⚠️ Root anchor failed:', e.message); }
+
         res.json({ success: true, results });
     } catch (error) {
         console.error('❌ Inventory Consume Error:', error.message);
+        res.status(500).json({ success: false, error: error.message });
+    }
+});
+
+// 7. Verify Inventory Integrity (ZKP Phase 3)
+// Recomputes Merkle root from DB and compares against on-chain anchor.
+router.get('/verify-integrity', async (req, res) => {
+    try {
+        const result = await verifyInventoryRoot();
+        res.json({
+            success: true,
+            valid: result.valid,
+            currentRoot: result.currentRoot,
+            onChainRoot: result.onChainRoot,
+            batchCount: result.batchCount
+        });
+    } catch (error) {
+        console.error('❌ Integrity check error:', error.message);
         res.status(500).json({ success: false, error: error.message });
     }
 });

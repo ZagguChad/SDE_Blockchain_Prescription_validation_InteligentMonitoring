@@ -33,13 +33,13 @@ function Login() {
             {error && <div className="badge badge-error" style={{ width: '100%', marginBottom: 'var(--space-md)', justifyContent: 'center' }}>{error}</div>}
             <form onSubmit={handleSubmit} className="card animate-fade">
                 <div className="input-group">
-                    <label className="label">Email / Username</label>
+                    <label className="label">Email / Username / Auth Key</label>
                     <input
                         type="text"
                         required
                         className="input-field"
                         value={formData.email}
-                        placeholder="doctor@example.com OR RX-123456"
+                        placeholder="doctor@example.com OR 0x... (auth key)"
                         onChange={(e) => setFormData({ ...formData, email: e.target.value })}
                     />
                 </div>
@@ -57,10 +57,10 @@ function Login() {
             </form>
             <div className="card" style={{ marginTop: 'var(--space-md)', background: 'var(--surface-color)', border: '1px solid var(--border-color)' }}>
                 <p className="text-sm">
-                    <strong>Patients:</strong> Use the <strong>exact username</strong> printed on your prescription (e.g. john-doe-A1B2C3).
+                    <strong>Patients (New):</strong> Paste your <strong>Secure Authentication Key</strong> (starts with 0x) from your prescription PDF, and enter your Prescription ID.
                 </p>
                 <p className="text-sm text-muted" style={{ marginTop: '5px' }}>
-                    *(These are on your printed prescription)*
+                    <strong>Patients (Legacy):</strong> Use the username printed on your prescription (e.g. john-doe-A1B2C3) with Prescription ID.
                 </p>
             </div>
             <p className="text-center text-muted" style={{ marginTop: 'var(--space-md)' }}>
