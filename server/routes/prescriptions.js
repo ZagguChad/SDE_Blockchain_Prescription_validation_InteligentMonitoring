@@ -13,7 +13,6 @@ const { normalizePrescriptionMedicines } = require('../utils/normalizeHelper');
 const { generatePatientKeypair, createAddressCommitment } = require('../utils/patientCrypto');
 const { verifyOnChainHashes } = require('../utils/hashVerifier');
 const { anchorInventoryRoot } = require('../utils/inventoryMerkle');
-const { canonicalizeMedicines } = require('../utils/canonicalPrescriptionHash');
 
 const { protect, authorize } = require('../middleware/authMiddleware');
 const User = require('../models/User');
@@ -362,14 +361,13 @@ router.post('/validate-dispense', protect, authorize('pharmacy'), async (req, re
         let hashIntegrity = { valid: false, patientMatch: false, medMatch: false };
         try {
             const plainPatientName = decrypt(log.patientName);
-            // Build plain medicines — canonical utility handles key order/sorting
+            // Build plain medicines — canonical snapshot uses {name, dosage, quantity} only
             const plainMedicines = log.medicines.map(m => {
                 const medObj = m.toObject ? m.toObject() : m;
                 return {
                     name: medObj.name || '',
                     dosage: medObj.dosage || '',
-                    quantity: medObj.quantity,
-                    instructions: decrypt(medObj.instructions || '')
+                    quantity: medObj.quantity
                 };
             });
             hashIntegrity = await verifyOnChainHashes(blockchainId, plainPatientName, log.patientAge, plainMedicines);
@@ -479,14 +477,13 @@ router.post('/complete-dispense', protect, authorize('pharmacy'), async (req, re
         // ── STEP 1b: ZKP Phase 2 — Hash Integrity Verification (HARD BLOCK) ──
         try {
             const plainPatientName = decrypt(log.patientName);
-            // Build plain medicines — canonical utility handles key order/sorting
+            // Build plain medicines — canonical snapshot uses {name, dosage, quantity} only
             const plainMedicines = log.medicines.map(m => {
                 const medObj = m.toObject ? m.toObject() : m;
                 return {
                     name: medObj.name || '',
                     dosage: medObj.dosage || '',
-                    quantity: medObj.quantity,
-                    instructions: decrypt(medObj.instructions || '')
+                    quantity: medObj.quantity
                 };
             });
             const hashResult = await verifyOnChainHashes(blockchainId, plainPatientName, log.patientAge, plainMedicines);

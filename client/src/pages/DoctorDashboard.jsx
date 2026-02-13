@@ -67,14 +67,14 @@ const DoctorDashboard = ({ account }) => {
         setStatusType('info');
 
         try {
-            // 1. Hash the data (CANONICAL — must match server/utils/canonicalPrescriptionHash.js)
-            // Canonical medicine: {name, dosage, quantity(Number), instructions}, sorted by name
+            // 1. Hash the data (CANONICAL — must match server/utils/canonicalSnapshot.js)
+            // Canonical medicine: {name, dosage, quantity(Number)} — NO instructions
+            // Sorted alphabetically by name for determinism
             const canonicalMeds = formData.medicines
                 .map(m => ({
                     name: String(m.name || '').trim(),
                     dosage: String(m.dosage || '').trim(),
-                    quantity: Number(m.quantity) || 0,
-                    instructions: String(m.instructions || '').trim()
+                    quantity: Math.floor(Number(m.quantity) || 0)
                 }))
                 .sort((a, b) => a.name.localeCompare(b.name));
 
