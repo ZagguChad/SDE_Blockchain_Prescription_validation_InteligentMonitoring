@@ -23,12 +23,27 @@ function Signup() {
     const handleSubmit = async (e) => {
         e.preventDefault();
         setError('');
+
+        // Client-side validation
+        if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(formData.email)) {
+            setError('Please enter a valid email address');
+            return;
+        }
+        if (formData.password.length < 6) {
+            setError('Password must be at least 6 characters');
+            return;
+        }
+
         try {
             const user = await signup(formData.name, formData.email, formData.password, formData.role);
             const path = rolePaths[user.role] || '/';
             navigate(path);
         } catch (err) {
-            setError(err.response?.data?.message || 'Signup failed');
+            if (!err.response) {
+                setError('Network error — cannot reach server. Is the backend running?');
+            } else {
+                setError(err.response?.data?.message || 'Signup failed');
+            }
         }
     };
 

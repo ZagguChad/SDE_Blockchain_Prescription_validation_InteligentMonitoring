@@ -78,6 +78,8 @@ router.post('/login', async (req, res) => {
             });
         }
 
+        console.log(`🔐 Login attempt: ${email}`);
+
         // Check for user by email only (username removed - patients use /api/patient/access)
         let user;
         if (email) {
@@ -87,14 +89,18 @@ router.post('/login', async (req, res) => {
         }
 
         if (!user) {
+            console.log(`❌ Login failed (user not found): ${email}`);
             return res.status(400).json({ message: 'Invalid credentials' });
         }
 
         // Check password
         const isMatch = await bcrypt.compare(password, user.password);
         if (!isMatch) {
+            console.log(`❌ Login failed (bad password): ${email}`);
             return res.status(400).json({ message: 'Invalid credentials' });
         }
+
+        console.log(`✅ Login success: ${email} (role: ${user.role})`);
 
         // Create Token
         const token = jwt.sign({ id: user._id, role: user.role }, process.env.JWT_SECRET, {
@@ -112,7 +118,7 @@ router.post('/login', async (req, res) => {
         });
 
     } catch (error) {
-        console.error(error);
+        console.error('❌ Login error:', error.message);
         res.status(500).json({ message: 'Server error' });
     }
 });

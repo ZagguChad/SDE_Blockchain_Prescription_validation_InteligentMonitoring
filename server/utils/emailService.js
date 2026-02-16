@@ -207,4 +207,165 @@ const sendInvoiceEmail = async (patientEmail, patientName, prescriptionId, dispe
     }
 };
 
-module.exports = { sendPrescriptionEmail, sendInvoiceEmail };
+/**
+ * Send OTP verification email to patient
+ * @param {string} patientEmail - Patient's email address
+ * @param {string} patientName - Patient's name
+ * @param {string} otp - 6-digit OTP code
+ * @param {string} prescriptionId - Prescription ID for context
+ * @returns {Promise<{success: boolean, error?: string}>}
+ */
+const sendOtpEmail = async (patientEmail, patientName, otp, prescriptionId) => {
+    try {
+        const transporter = createTransporter();
+
+        const emailHTML = `
+<!DOCTYPE html>
+<html>
+<head>
+    <style>
+        body { font-family: Arial, sans-serif; line-height: 1.6; color: #333; }
+        .container { max-width: 600px; margin: 0 auto; padding: 20px; }
+        .header { background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); color: white; padding: 20px; border-radius: 8px 8px 0 0; }
+        .content { background: #f9fafb; padding: 20px; border: 1px solid #e5e7eb; }
+        .otp-box { background: #fff; border: 2px solid #667eea; padding: 20px; margin: 15px 0; border-radius: 8px; text-align: center; }
+        .otp-code { font-family: monospace; font-size: 32px; letter-spacing: 8px; font-weight: bold; color: #667eea; }
+        .footer { background: #374151; color: #9ca3af; padding: 15px; text-align: center; border-radius: 0 0 8px 8px; font-size: 12px; }
+        .warning { color: #dc2626; font-weight: bold; }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <h1 style="margin: 0;">🔐 Verification Code</h1>
+            <p style="margin: 5px 0 0 0; opacity: 0.9;">BlockRx Medical System</p>
+        </div>
+        
+        <div class="content">
+            <p>Dear <strong>${patientName}</strong>,</p>
+            
+            <p>Use the following code to verify your identity and access your prescription <strong>#${prescriptionId}</strong>:</p>
+            
+            <div class="otp-box">
+                <p style="margin: 0 0 10px 0; font-size: 13px; color: #6b7280;">Your Verification Code</p>
+                <p class="otp-code" style="margin: 0;">${otp}</p>
+                <p style="margin: 10px 0 0 0; font-size: 13px; color: #6b7280;">Valid for 5 minutes</p>
+            </div>
+            
+            <p class="warning">⚠️ Do not share this code with anyone. BlockRx staff will never ask for your OTP.</p>
+            
+            <p style="font-size: 13px; color: #6b7280; margin-top: 20px;">
+                If you did not request this code, please ignore this email. Your account remains secure.
+            </p>
+        </div>
+        
+        <div class="footer">
+            <p style="margin: 0;">BlockRx - Blockchain-Based Prescription System</p>
+            <p style="margin: 5px 0 0 0;">This is an automated message. Please do not reply to this email.</p>
+        </div>
+    </div>
+</body>
+</html>
+        `;
+
+        const mailOptions = {
+            from: process.env.SMTP_FROM || `"BlockRx Medical System" <${process.env.SMTP_USER}>`,
+            to: patientEmail,
+            subject: `🔐 Your BlockRx Verification Code - #${prescriptionId}`,
+            html: emailHTML
+        };
+
+        const info = await transporter.sendMail(mailOptions);
+        console.log('✅ OTP email sent successfully:', info.messageId);
+        return { success: true, messageId: info.messageId };
+
+    } catch (error) {
+        console.error('❌ OTP email sending failed:', error.message);
+        return { success: false, error: error.message };
+    }
+};
+
+/**
+ * Send dispense verification email to patient (pharmacy-side OTP)
+ * This is used when pharmacist needs to verify patient identity before dispensing.
+ * @param {string} patientEmail - Patient's email address
+ * @param {string} patientName - Patient's name
+ * @param {string} otp - 6-digit OTP code
+ * @param {string} prescriptionId - Prescription ID for context
+ * @returns {Promise<{success: boolean, error?: string}>}
+ */
+const sendDispenseVerificationEmail = async (patientEmail, patientName, otp, prescriptionId) => {
+    try {
+        const transporter = createTransporter();
+
+        const emailHTML = `
+<!DOCTYPE html>
+<html>
+<head>
+    <style>
+        body { font-family: Arial, sans-serif; line-height: 1.6; color: #333; }
+        .container { max-width: 600px; margin: 0 auto; padding: 20px; }
+        .header { background: linear-gradient(135deg, #f59e0b 0%, #d97706 100%); color: white; padding: 20px; border-radius: 8px 8px 0 0; }
+        .content { background: #f9fafb; padding: 20px; border: 1px solid #e5e7eb; }
+        .otp-box { background: #fff; border: 2px solid #f59e0b; padding: 20px; margin: 15px 0; border-radius: 8px; text-align: center; }
+        .otp-code { font-family: monospace; font-size: 32px; letter-spacing: 8px; font-weight: bold; color: #d97706; }
+        .footer { background: #374151; color: #9ca3af; padding: 15px; text-align: center; border-radius: 0 0 8px 8px; font-size: 12px; }
+        .warning { color: #dc2626; font-weight: bold; }
+        .pharmacy-note { background: #fef3c7; border: 1px solid #f59e0b; padding: 12px; border-radius: 6px; margin: 15px 0; }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <h1 style="margin: 0;">💊 Pharmacy Verification Code</h1>
+            <p style="margin: 5px 0 0 0; opacity: 0.9;">BlockRx Medical System</p>
+        </div>
+        
+        <div class="content">
+            <p>Dear <strong>${patientName}</strong>,</p>
+            
+            <div class="pharmacy-note">
+                <p style="margin: 0;"><strong>🏥 A pharmacy is preparing to dispense your prescription #${prescriptionId}.</strong></p>
+                <p style="margin: 5px 0 0 0; font-size: 13px;">Please provide this code to the pharmacist to verify your identity.</p>
+            </div>
+            
+            <div class="otp-box">
+                <p style="margin: 0 0 10px 0; font-size: 13px; color: #6b7280;">Your Verification Code</p>
+                <p class="otp-code" style="margin: 0;">${otp}</p>
+                <p style="margin: 10px 0 0 0; font-size: 13px; color: #6b7280;">Valid for 5 minutes</p>
+            </div>
+            
+            <p class="warning">⚠️ Only share this code with the pharmacist at the counter. Never share it over phone or text.</p>
+            
+            <p style="font-size: 13px; color: #6b7280; margin-top: 20px;">
+                If you are not at a pharmacy or did not expect this, please ignore this email and contact your healthcare provider.
+            </p>
+        </div>
+        
+        <div class="footer">
+            <p style="margin: 0;">BlockRx - Blockchain-Based Prescription System</p>
+            <p style="margin: 5px 0 0 0;">This is an automated message. Please do not reply to this email.</p>
+        </div>
+    </div>
+</body>
+</html>
+        `;
+
+        const mailOptions = {
+            from: process.env.SMTP_FROM || `"BlockRx Medical System" <${process.env.SMTP_USER}>`,
+            to: patientEmail,
+            subject: `💊 Pharmacy Verification Code - Prescription #${prescriptionId}`,
+            html: emailHTML
+        };
+
+        const info = await transporter.sendMail(mailOptions);
+        console.log('✅ Dispense verification email sent successfully:', info.messageId);
+        return { success: true, messageId: info.messageId };
+
+    } catch (error) {
+        console.error('❌ Dispense verification email sending failed:', error.message);
+        return { success: false, error: error.message };
+    }
+};
+
+module.exports = { sendPrescriptionEmail, sendInvoiceEmail, sendOtpEmail, sendDispenseVerificationEmail };

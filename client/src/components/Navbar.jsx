@@ -1,7 +1,7 @@
 import { Link, useLocation } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext';
 
-function Navbar({ account, connectWallet, setupNetwork }) {
+function Navbar({ account, connectWallet, setupNetwork, walletError }) {
     const location = useLocation();
     const { user, logout } = useAuth();
 
@@ -63,6 +63,11 @@ function Navbar({ account, connectWallet, setupNetwork }) {
                         )}
                     </div>
                 </div>
+                {walletError && (
+                    <div style={{ position: 'absolute', top: '100%', right: '1rem', background: 'rgba(220, 38, 38, 0.9)', color: 'white', padding: '0.4rem 0.8rem', borderRadius: '0 0 6px 6px', fontSize: '0.75rem', maxWidth: '300px', zIndex: 51 }}>
+                        ⚠️ {walletError}
+                    </div>
+                )}
             </div>
         </nav>
     );

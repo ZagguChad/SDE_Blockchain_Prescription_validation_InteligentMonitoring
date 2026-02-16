@@ -1,30 +1,18 @@
 /**
  * Patient Cryptographic Identity Module
  * 
- * Provides ECDSA-based self-sovereign patient ownership:
- * - Keypair generation (secp256k1)
- * - Patient commitment creation: keccak256(publicKey || DOB)
- * - Signature verification with public key recovery
- * - Challenge message construction with replay protection
+ * Phase 5: Private key NEVER touches the server.
+ * Keypair is generated client-side (DoctorDashboard).
+ * Server only stores patient address + commitment hash.
  * 
- * This module REPLACES backend-controlled username ownership
- * with cryptographic ownership that the backend cannot forge.
+ * This module provides:
+ * - Commitment creation: keccak256(address || DOB)
+ * - Signature verification with address recovery
+ * - Challenge message construction with replay protection
  */
 
 const { ethers } = require('ethers');
 
-/**
- * Generate a new ECDSA keypair for a patient.
- * @returns {{ privateKey: string, publicKey: string, address: string }}
- */
-function generatePatientKeypair() {
-    const wallet = ethers.Wallet.createRandom();
-    return {
-        privateKey: wallet.privateKey,           // 0x-prefixed hex (32 bytes)
-        publicKey: wallet.publicKey,             // 0x-prefixed hex (65 bytes uncompressed)
-        address: wallet.address                  // 0x-prefixed checksummed address
-    };
-}
 
 /**
  * Create a patient commitment hash.
@@ -175,7 +163,6 @@ function validateChallengeTimestamp(challengeTimestamp) {
 }
 
 module.exports = {
-    generatePatientKeypair,
     createPatientCommitment,
     createAddressCommitment,
     createChallengeMessage,

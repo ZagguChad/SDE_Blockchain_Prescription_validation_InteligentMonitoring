@@ -148,7 +148,7 @@ const DoctorDashboard = ({ account }) => {
 
             setStatus(`On-chain success! Issued ID: ${pId}. Saving metadata...`);
 
-            // 3. Save Metadata to Backend (include blockchain sync info)
+            // 3. Save Metadata to Backend (TOTP auto-generated server-side)
             const backendRes = await axios.post('http://localhost:5000/api/prescriptions', {
                 blockchainId: pId,
                 doctorAddress: account,
@@ -168,7 +168,7 @@ const DoctorDashboard = ({ account }) => {
                 blockchainSynced: receipt.status === 1
             });
 
-            const { patientCredentials, emailSent, emailError } = backendRes.data;
+            const { patientCredentials, totpSetup, emailSent, emailError } = backendRes.data;
 
             // Set for display
             setLastIssuedPrescription({
@@ -176,6 +176,7 @@ const DoctorDashboard = ({ account }) => {
                 patientName: formData.patientName,
                 patientEmail: formData.patientEmail,
                 patientUsername: patientCredentials.username,
+                totpSetup,  // { qrCodeDataUrl, manualEntryKey, backupCodes }
                 age: formData.age,
                 medicines: formData.medicines,
                 notes: formData.notes,
@@ -188,6 +189,18 @@ const DoctorDashboard = ({ account }) => {
             setStatus(`Success! Prescription #${pId} Issued.`);
             setStatusType('success');
             setShowModal(true);
+
+            // Reset form for next prescription — prevents accidental duplicates
+            setFormData({
+                patientName: '',
+                age: '',
+                patientDOB: '',
+                patientEmail: '',
+                diagnosis: '',
+                allergies: '',
+                medicines: [{ name: '', quantity: 1, dosage: '', instructions: '' }],
+                notes: ''
+            });
 
         } catch (error) {
             console.error(error);
@@ -445,6 +458,37 @@ const DoctorDashboard = ({ account }) => {
                                             ⚠️ <strong>Email Failed</strong><br />
                                             <span style={{ fontSize: '0.85rem' }}>{lastIssuedPrescription.emailError || 'Unknown error'}</span>
                                         </p>
+                                    </div>
+                                )}
+
+                                {/* Patient Authenticator Setup (TOTP QR Code) */}
+                                {lastIssuedPrescription.totpSetup && (
+                                    <div style={{ marginTop: '1rem', padding: '0.8rem', background: '#f0fdf4', border: '2px solid #22c55e', borderRadius: '6px' }}>
+                                        <p style={{ margin: '0 0 0.5rem', color: '#166534', fontSize: '0.9rem', fontWeight: 'bold' }}>
+                                            📱 PATIENT AUTHENTICATOR SETUP
+                                        </p>
+                                        <p style={{ margin: '0 0 0.5rem', color: '#166534', fontSize: '0.8rem' }}>
+                                            Have the patient scan this QR code with Google Authenticator. Required at pharmacy.
+                                        </p>
+                                        <div style={{ textAlign: 'center', padding: '0.5rem', background: 'white', borderRadius: '8px', marginBottom: '0.5rem' }}>
+                                            <img src={lastIssuedPrescription.totpSetup.qrCodeDataUrl} alt="TOTP QR Code" style={{ width: '180px', height: '180px' }} />
+                                        </div>
+                                        <p style={{ margin: '0 0 0.3rem', color: '#166534', fontSize: '0.75rem' }}>
+                                            <strong>Manual Entry Key:</strong>
+                                        </p>
+                                        <div style={{
+                                            background: '#1e1e1e', padding: '0.4rem 0.6rem', borderRadius: '4px',
+                                            fontFamily: 'monospace', fontSize: '0.8rem', color: '#4ade80',
+                                            wordBreak: 'break-all', userSelect: 'all', marginBottom: '0.5rem'
+                                        }}>
+                                            {lastIssuedPrescription.totpSetup.manualEntryKey}
+                                        </div>
+                                        <button
+                                            onClick={() => { navigator.clipboard.writeText(lastIssuedPrescription.totpSetup.manualEntryKey); alert('Manual key copied!'); }}
+                                            style={{ padding: '0.3rem 0.8rem', background: '#22c55e', color: 'white', border: 'none', borderRadius: '4px', cursor: 'pointer', fontSize: '0.8rem' }}
+                                        >
+                                            📋 Copy Manual Key
+                                        </button>
                                     </div>
                                 )}
                             </div>

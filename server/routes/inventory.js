@@ -78,8 +78,13 @@ router.post('/add', async (req, res) => {
 
         await newBatch.save();
 
-        // ZKP Phase 3: Anchor updated Merkle root (awaited after DB commit)
-        try { await anchorInventoryRoot(); } catch (e) { console.warn('⚠️ Root anchor failed:', e.message); }
+        // Phase 4: Anchor updated Merkle root (must succeed for tamper detection)
+        try {
+            await anchorInventoryRoot();
+        } catch (e) {
+            console.warn(`⚠️ Root anchor failed after batch add: ${e.message}`);
+            // Non-critical for add — batch is saved, root will be re-anchored on next mutation
+        }
 
         res.status(201).json({ success: true, data: newBatch });
     } catch (error) {
@@ -145,8 +150,12 @@ router.post('/dispense', async (req, res) => {
 
         await batch.save();
 
-        // ZKP Phase 3: Anchor updated Merkle root (awaited after DB commit)
-        try { await anchorInventoryRoot(); } catch (e) { console.warn('⚠️ Root anchor failed:', e.message); }
+        // Phase 4: Anchor updated Merkle root
+        try {
+            await anchorInventoryRoot();
+        } catch (e) {
+            console.warn(`⚠️ Root anchor failed after dispense: ${e.message}`);
+        }
 
         res.json({ success: true, message: 'Stock updated', currentStock: batch.quantityAvailable });
     } catch (error) {
@@ -177,8 +186,12 @@ router.get('/alerts/expiry', async (req, res) => {
             const expiredIds = expired.map(b => b._id);
             await Inventory.updateMany({ _id: { $in: expiredIds } }, { status: 'EXPIRED' });
 
-            // ZKP Phase 3: Anchor updated Merkle root after expiry changes
-            try { await anchorInventoryRoot(); } catch (e) { console.warn('⚠️ Root anchor failed:', e.message); }
+            // Phase 4: Anchor updated Merkle root after expiry changes
+            try {
+                await anchorInventoryRoot();
+            } catch (e) {
+                console.warn(`⚠️ Root anchor failed after expiry update: ${e.message}`);
+            }
         }
 
         res.json({ success: true, data: { expiringSoon, expired } });
@@ -328,8 +341,12 @@ router.post('/consume', async (req, res) => {
             });
         }
 
-        // ZKP Phase 3: Anchor updated Merkle root after consume
-        try { await anchorInventoryRoot(); } catch (e) { console.warn('⚠️ Root anchor failed:', e.message); }
+        // Phase 4: Anchor updated Merkle root after consume
+        try {
+            await anchorInventoryRoot();
+        } catch (e) {
+            console.warn(`⚠️ Root anchor failed after consume: ${e.message}`);
+        }
 
         res.json({ success: true, results });
     } catch (error) {

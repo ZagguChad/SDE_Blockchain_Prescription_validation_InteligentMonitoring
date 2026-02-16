@@ -11,3 +11,6 @@ cache/
 *.pdf
 server/logs/
 server/test_*.js
+server/debug_*.js
+server/reproduce_*.js
+server/verify_*.js

@@ -44,4 +44,12 @@ const UserSchema = new mongoose.Schema({
     }
 });
 
+// Normalize email to lowercase on save
+UserSchema.pre('save', function (next) {
+    if (this.email) {
+        this.email = this.email.toLowerCase().trim();
+    }
+    next();
+});
+
 module.exports = mongoose.model('User', UserSchema);

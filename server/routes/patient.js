@@ -3,12 +3,6 @@ const router = express.Router();
 const jwt = require('jsonwebtoken');
 const PrescriptionLog = require('../models/PrescriptionLog');
 const { decrypt } = require('../utils/encryption');
-const {
-    createChallengeMessage,
-    verifyPatientSignature,
-    verifyCommitmentMatch,
-    validateChallengeTimestamp
-} = require('../utils/patientCrypto');
 
 // Middleware to protect patient routes
 const protectPatient = (req, res, next) => {
@@ -52,84 +46,10 @@ router.post('/access', async (req, res) => {
             });
         }
 
-        const { patientUsername, prescriptionId, signature, timestamp } = req.body;
+        const { patientUsername, prescriptionId } = req.body;
 
         // =========================================================================
-        // MODE 1: ZKP Signature-Based Login (new prescriptions)
-        // =========================================================================
-        if (signature && prescriptionId && timestamp) {
-            // Validate timestamp window (replay protection)
-            const tsValidation = validateChallengeTimestamp(timestamp);
-            if (!tsValidation.valid) {
-                return res.status(401).json({
-                    message: `Authentication failed: ${tsValidation.error}`
-                });
-            }
-
-            // Find prescription
-            const prescription = await PrescriptionLog.findOne({ blockchainId: prescriptionId });
-            if (!prescription) {
-                return res.status(400).json({ message: 'Invalid credentials' });
-            }
-
-            // Check if this prescription has a commitment
-            if (!prescription.patientCommitment) {
-                return res.status(400).json({
-                    message: 'This prescription does not support signature-based login. Use username login instead.'
-                });
-            }
-
-            // Check prescription status
-            if (prescription.status === 'DISPENSED') {
-                return res.status(403).json({ message: 'This prescription has been dispensed. Access is no longer available.' });
-            }
-            if (prescription.status === 'EXPIRED') {
-                return res.status(403).json({ message: 'This prescription has expired. Access is no longer available.' });
-            }
-            if (prescription.status !== 'ACTIVE') {
-                return res.status(403).json({ message: 'This prescription is not active.' });
-            }
-
-            // Verify signature: recover address from signed challenge
-            const challengeMessage = createChallengeMessage(prescriptionId, timestamp);
-            const sigResult = verifyPatientSignature(challengeMessage, signature);
-
-            if (!sigResult.valid) {
-                return res.status(401).json({ message: 'Invalid signature' });
-            }
-
-            // Verify commitment: keccak256(recoveredAddress || DOB) === storedCommitment
-            const commitmentMatch = verifyCommitmentMatch(
-                sigResult.recoveredAddress,
-                prescription.patientDOB,
-                prescription.patientCommitment
-            );
-
-            if (!commitmentMatch) {
-                return res.status(401).json({ message: 'Ownership verification failed. Invalid key.' });
-            }
-
-            // SUCCESS: Create token
-            const token = jwt.sign(
-                {
-                    prescriptionId: prescriptionId,
-                    type: 'patient',
-                    authMethod: 'zkp-signature'
-                },
-                process.env.JWT_SECRET,
-                { expiresIn: '7d' }
-            );
-
-            return res.json({
-                success: true,
-                token,
-                prescriptionId: prescription.blockchainId,
-                authMethod: 'zkp-signature'
-            });
-        }
-
-        // =========================================================================
-        // MODE 2: Legacy Username Login (backward compatibility for old prescriptions)
+        // Username + Prescription ID Login
         // =========================================================================
         if (patientUsername && prescriptionId) {
             const prescription = await PrescriptionLog.findOne({ blockchainId: prescriptionId });
@@ -154,11 +74,34 @@ router.post('/access', async (req, res) => {
                 return res.status(403).json({ message: 'This prescription is not active.' });
             }
 
+            // Check if MFA is required
+            if (prescription.emailOtpEnabled !== false) {
+                const mfaToken = jwt.sign(
+                    {
+                        prescriptionId: prescriptionId,
+                        type: 'patient-pending-mfa',
+                        authMethod: 'username'
+                    },
+                    process.env.JWT_SECRET,
+                    { expiresIn: '15m' }
+                );
+
+                return res.json({
+                    success: true,
+                    pendingMfa: true,
+                    token: mfaToken,
+                    prescriptionId: prescription.blockchainId,
+                    authMethod: 'username',
+                    mfaRequired: ['emailOtp']
+                });
+            }
+
+            // No MFA — issue full token
             const token = jwt.sign(
                 {
                     prescriptionId: prescriptionId,
                     type: 'patient',
-                    authMethod: 'legacy-username'
+                    authMethod: 'username'
                 },
                 process.env.JWT_SECRET,
                 { expiresIn: '7d' }
@@ -168,15 +111,15 @@ router.post('/access', async (req, res) => {
                 success: true,
                 token,
                 prescriptionId: prescription.blockchainId,
-                authMethod: 'legacy-username'
+                authMethod: 'username'
             });
         }
 
         // =========================================================================
-        // Neither mode provided
+        // Missing credentials
         // =========================================================================
         return res.status(400).json({
-            message: 'Please provide either (signature + prescriptionId + timestamp) or (patientUsername + prescriptionId)'
+            message: 'Please provide your username and prescription ID to log in.'
         });
 
     } catch (error) {
@@ -232,8 +175,9 @@ router.get('/prescription/:id', protectPatient, async (req, res) => {
         }));
 
         // Strip sensitive crypto fields from response
-        delete decryptedPrescription.patientPublicKey;
         delete decryptedPrescription.patientAddress;
+        delete decryptedPrescription.totpSecretEncrypted;
+        delete decryptedPrescription.totpBackupCodes;
 
         res.json({ success: true, data: decryptedPrescription });
 

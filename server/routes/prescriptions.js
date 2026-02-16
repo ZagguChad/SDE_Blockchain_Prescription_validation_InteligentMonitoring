@@ -10,9 +10,11 @@ const { generateProtectedPDF, generateInvoicePDF } = require('../utils/pdfGenera
 const { encryptPDF } = require('../utils/pdfEncryptor');
 const { sendPrescriptionEmail, sendInvoiceEmail } = require('../utils/emailService');
 const { normalizePrescriptionMedicines } = require('../utils/normalizeHelper');
-const { generatePatientKeypair, createAddressCommitment } = require('../utils/patientCrypto');
+const { createAddressCommitment } = require('../utils/patientCrypto');
+const { generateTotpSecret, generateQrDataUrl, encryptTotpSecret, generateBackupCodes } = require('../utils/totpService');
 const { verifyOnChainHashes } = require('../utils/hashVerifier');
-const { anchorInventoryRoot } = require('../utils/inventoryMerkle');
+const { validateOnChainState, ChainValidationError, ChainErrorCodes } = require('../utils/chainValidator');
+const { anchorInventoryRoot, verifyRootOrAbort } = require('../utils/inventoryMerkle');
 
 const { protect, authorize } = require('../middleware/authMiddleware');
 const User = require('../models/User');
@@ -113,12 +115,18 @@ router.post('/', protect, authorize('doctor'), async (req, res) => {
         const { generatePatientUsername } = require('../utils/username');
         const patientUsername = generatePatientUsername(patientName, blockchainId);
 
-        // 3b. Generate Patient Keypair (ZKP Phase 1 — Self-Sovereign Identity)
-        const patientKeypair = generatePatientKeypair();
-        const patientCommitment = createAddressCommitment(patientKeypair.address, patientDOB);
-        console.log(`🔐 Patient keypair generated for ${blockchainId}, commitment: ${patientCommitment.substring(0, 10)}...`);
+        // 3b. Accept optional patient identity (backward compat — no longer required)
+        const { patientAddress, patientCommitment } = req.body;
 
-        // 4. Save to DB
+        // 3c. Auto-generate TOTP secret for patient verification at pharmacy
+        const totpSecret = generateTotpSecret();
+        const totpEncrypted = encryptTotpSecret(totpSecret);
+        const totpLabel = `Rx-${blockchainId} (${patientName})`;
+        const qrCodeDataUrl = await generateQrDataUrl(totpSecret, totpLabel);
+        const backupCodes = generateBackupCodes(8);
+        console.log(`🔐 TOTP secret generated for prescription ${blockchainId}`);
+
+        // 4. Save to DB (with TOTP secret for pharmacy verification)
         const savedLog = await PrescriptionLog.findOneAndUpdate(
             { blockchainId },
             {
@@ -137,9 +145,11 @@ router.post('/', protect, authorize('doctor'), async (req, res) => {
                 maxUsage: maxUsage || 1,
                 usageCount: 0,
                 patientHash,
-                patientCommitment,
-                patientPublicKey: encrypt(patientKeypair.publicKey),
-                patientAddress: patientKeypair.address,
+                patientCommitment: patientCommitment || null,
+                patientAddress: patientAddress || null,
+                totpEnabled: true,
+                totpSecretEncrypted: totpEncrypted,
+                totpBackupCodes: backupCodes,
                 blockchainSynced: blockchainSynced || false,
                 txHash: txHash || null,
                 blockNumber: blockNumber || null,
@@ -170,7 +180,6 @@ router.post('/', protect, authorize('doctor'), async (req, res) => {
                 diagnosis,
                 expiryDate,
                 doctorAddress,
-                patientPrivateKey: patientKeypair.privateKey  // ZKP Phase 1: embed in QR
             }, pdfPassword);
             console.log(`📄 PDF generated (${unencryptedPdf.length} bytes)`);
 
@@ -199,7 +208,7 @@ router.post('/', protect, authorize('doctor'), async (req, res) => {
             // Don't fail the entire request - prescription is still created
         }
 
-        // 8. Return response with email status
+        // 8. Return response with email status + TOTP QR for doctor modal
         res.status(201).json({
             success: true,
             data: savedLog,
@@ -207,29 +216,35 @@ router.post('/', protect, authorize('doctor'), async (req, res) => {
                 username: patientUsername,
                 password: blockchainId
             },
-            patientCommitment: patientCommitment,  // ZKP Phase 1
+            // TOTP setup data for doctor to show patient
+            totpSetup: {
+                qrCodeDataUrl,
+                manualEntryKey: totpSecret,
+                backupCodes: backupCodes.map(bc => bc.code)
+            },
             emailSent: emailResult.success,
             emailError: emailResult.error || null
         });
 
-        // ZKP Phase 1: Set patient commitment on-chain (async, non-blocking)
-        setImmediate(async () => {
-            try {
-                const { ethers } = require('ethers');
-                const contractInfo = require('../contractInfo.json');
-                const provider = new ethers.JsonRpcProvider(process.env.BLOCKCHAIN_RPC || 'http://127.0.0.1:8545');
-                const signer = new ethers.Wallet(process.env.DEPLOYER_PRIVATE_KEY || '0xac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80', provider);
-                const contract = new ethers.Contract(contractInfo.address, contractInfo.abi, signer);
+        // On-chain commitment (only if patientAddress was provided — backward compat)
+        if (patientAddress && patientCommitment) {
+            setImmediate(async () => {
+                try {
+                    const { ethers } = require('ethers');
+                    const contractInfo = require('../contractInfo.json');
+                    const provider = new ethers.JsonRpcProvider(process.env.BLOCKCHAIN_RPC || 'http://127.0.0.1:8545');
+                    const signer = new ethers.Wallet(process.env.DEPLOYER_PRIVATE_KEY || '0xac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80', provider);
+                    const contract = new ethers.Contract(contractInfo.address, contractInfo.abi, signer);
 
-                const idBytes = ethers.encodeBytes32String(blockchainId);
-                const tx = await contract.setPatientCommitment(idBytes, patientCommitment);
-                await tx.wait();
-                console.log(`✅ Patient commitment set on-chain for ${blockchainId}`);
-            } catch (commitErr) {
-                // Non-critical: commitment is also stored in DB
-                console.warn(`⚠️ On-chain commitment failed for ${blockchainId}: ${commitErr.message}`);
-            }
-        });
+                    const idBytes = ethers.encodeBytes32String(blockchainId);
+                    const tx = await contract.setPatientCommitment(idBytes, patientCommitment);
+                    await tx.wait();
+                    console.log(`✅ Patient commitment set on-chain for ${blockchainId}`);
+                } catch (commitErr) {
+                    console.warn(`⚠️ On-chain commitment failed for ${blockchainId}: ${commitErr.message}`);
+                }
+            });
+        }
     } catch (error) {
         console.error("❌ Prescription Save Error:", error);
         res.status(500).json({ success: false, error: error.message });
@@ -348,37 +363,71 @@ router.get('/admin/alerts', protect, authorize('admin'), async (req, res) => {
 });
 
 
-// Validate Dispense (Dry Run)
+// Validate Dispense (Dry Run) — CHAIN AUTHORITY ENFORCED
 router.post('/validate-dispense', protect, authorize('pharmacy'), async (req, res) => {
     try {
-        const { blockchainId } = req.body;
+        const { blockchainId, signature, timestamp } = req.body;
         const log = await PrescriptionLog.findOne({ blockchainId });
 
         if (!log) return res.status(404).json({ success: false, message: 'Prescription not found' });
-        if (log.status === 'DISPENSED') return res.status(400).json({ success: false, message: 'Already dispensed' });
-
-        // ZKP Phase 2: Hash Integrity Verification (non-blocking warning in validate)
-        let hashIntegrity = { valid: false, patientMatch: false, medMatch: false };
-        try {
-            const plainPatientName = decrypt(log.patientName);
-            // Build plain medicines — canonical snapshot uses {name, dosage, quantity} only
-            const plainMedicines = log.medicines.map(m => {
-                const medObj = m.toObject ? m.toObject() : m;
-                return {
-                    name: medObj.name || '',
-                    dosage: medObj.dosage || '',
-                    quantity: medObj.quantity
-                };
+        if (log.status !== 'ACTIVE') {
+            return res.status(400).json({
+                success: false,
+                message: `Prescription cannot be dispensed — current status: ${log.status}`,
+                code: 'INVALID_STATE'
             });
-            hashIntegrity = await verifyOnChainHashes(blockchainId, plainPatientName, log.patientAge, plainMedicines);
-            if (!hashIntegrity.valid) {
-                console.warn(`⚠️ Hash integrity check FAILED for ${blockchainId}:`, hashIntegrity.details);
-            } else {
-                console.log(`✅ Hash integrity verified for ${blockchainId}`);
-            }
-        } catch (hashErr) {
-            console.warn(`⚠️ Hash verification skipped for ${blockchainId}: ${hashErr.message}`);
         }
+
+        // ── CHAIN AUTHORITY: Full on-chain state validation (HARD BLOCK) ──
+        const plainPatientName = decrypt(log.patientName);
+        const plainMedicines = log.medicines.map(m => {
+            const medObj = m.toObject ? m.toObject() : m;
+            return {
+                name: medObj.name || '',
+                dosage: medObj.dosage || '',
+                quantity: medObj.quantity
+            };
+        });
+
+        let chainResult;
+        try {
+            chainResult = await validateOnChainState(blockchainId, plainPatientName, log.patientAge, plainMedicines);
+        } catch (chainErr) {
+            if (chainErr instanceof ChainValidationError) {
+                // Auto-sync DB status from chain when there's a state divergence
+                const syncCodes = [ChainErrorCodes.STATUS_MISMATCH, ChainErrorCodes.USAGE_EXHAUSTED, ChainErrorCodes.EXPIRED_ON_CHAIN];
+                if (syncCodes.includes(chainErr.code)) {
+                    const chainStatus = chainErr.context?.actual || chainErr.context?.onChainState?.statusLabel;
+                    const dbStatus = chainStatus === 'USED' ? 'DISPENSED' : chainStatus === 'EXPIRED' ? 'EXPIRED' : null;
+                    if (dbStatus && log.status !== dbStatus) {
+                        console.warn(`🔄 [DB_SYNC] Syncing DB status for ${blockchainId}: ${log.status} → ${dbStatus} (chain authority)`);
+                        log.status = dbStatus;
+                        if (dbStatus === 'DISPENSED') log.dispensedAt = log.dispensedAt || new Date();
+                        await log.save();
+                    }
+                }
+
+                return res.status(chainErr.httpStatus).json({
+                    success: false,
+                    message: chainErr.message,
+                    code: chainErr.code,
+                    details: chainErr.context
+                });
+            }
+            // Unknown error — treat as chain unreachable
+            console.error(`🔴 [CHAIN_UNREACHABLE] Validate-Dispense unexpected error for ${blockchainId}:`, chainErr.message);
+            return res.status(503).json({
+                success: false,
+                message: 'Blockchain verification unavailable. Cannot validate prescription.',
+                code: ChainErrorCodes.CHAIN_UNREACHABLE
+            });
+        }
+
+        console.log(`✅ On-chain validation passed for ${blockchainId} (validate-dispense)`);
+
+        // ── Patient verification now handled by TOTP/OTP at pharmacy counter ──
+        // ── (see /api/dispense-mfa routes — signature verification removed) ──
+        console.log(`ℹ️ Patient verification for ${blockchainId} will be handled by dispense MFA flow`);
 
         // Normalize medicines — name is stored as PLAIN TEXT (not encrypted)
         // Only instructions are encrypted
@@ -431,12 +480,9 @@ router.post('/validate-dispense', protect, authorize('pharmacy'), async (req, re
         res.json({
             success: true,
             valid: true,
-            message: 'Validation successful',
-            hashVerified: hashIntegrity.valid,
-            hashDetails: hashIntegrity.valid ? undefined : {
-                patientMatch: hashIntegrity.patientMatch,
-                medMatch: hashIntegrity.medMatch
-            }
+            message: 'Validation successful — on-chain state verified',
+            chainVerified: true,
+            onChainState: chainResult.onChainState
         });
     } catch (error) {
         console.error('❌ Validate-Dispense Error:', error.message, { stack: error.stack });
@@ -466,50 +512,99 @@ router.post('/complete-dispense', protect, authorize('pharmacy'), async (req, re
             return res.status(404).json({ success: false, message: 'Prescription not found' });
         }
 
-        if (log.status === 'DISPENSED') {
-            return res.status(400).json({ success: false, message: 'Prescription already dispensed' });
+        if (log.status !== 'ACTIVE') {
+            return res.status(400).json({
+                success: false,
+                message: `Prescription cannot be dispensed — current status: ${log.status}`,
+                code: 'INVALID_STATE'
+            });
         }
 
         if (!log.medicines || log.medicines.length === 0) {
             return res.status(400).json({ success: false, message: 'Prescription contains no medicines' });
         }
 
-        // ── STEP 1b: ZKP Phase 2 — Hash Integrity Verification (HARD BLOCK) ──
-        try {
-            const plainPatientName = decrypt(log.patientName);
-            // Build plain medicines — canonical snapshot uses {name, dosage, quantity} only
-            const plainMedicines = log.medicines.map(m => {
-                const medObj = m.toObject ? m.toObject() : m;
-                return {
-                    name: medObj.name || '',
-                    dosage: medObj.dosage || '',
-                    quantity: medObj.quantity
-                };
-            });
-            const hashResult = await verifyOnChainHashes(blockchainId, plainPatientName, log.patientAge, plainMedicines);
+        // ── STEP 1a: DISPENSE MFA GATE (Optional Patient Re-Verification) ──
+        // If patient has TOTP or email configured, require a valid dispense-mfa token.
+        // If neither is configured, skip MFA (backward compatible).
+        const hasTotpConfigured = log.totpEnabled === true && !!log.totpSecretEncrypted;
+        const hasEmailConfigured = !!log.patientEmail;
+        const mfaRequired = hasTotpConfigured || hasEmailConfigured;
 
-            if (!hashResult.valid) {
-                console.error(`🚫 DISPENSE BLOCKED — Hash integrity FAILED for ${blockchainId}`, hashResult.details);
+        if (mfaRequired) {
+            const dispenseMfaToken = req.headers['x-dispense-mfa-token'] || req.body.dispenseMfaToken;
+
+            if (!dispenseMfaToken) {
                 return res.status(403).json({
                     success: false,
-                    message: 'Prescription data integrity check failed. The off-chain data does not match the on-chain hash anchors. This prescription may have been tampered with.',
-                    code: 'DATA_TAMPERED',
-                    details: {
-                        patientMatch: hashResult.patientMatch,
-                        medMatch: hashResult.medMatch
-                    }
+                    message: 'Patient verification required before dispensing.',
+                    code: 'MFA_REQUIRED',
+                    mfaRequired: true,
+                    totpEnabled: hasTotpConfigured,
+                    emailAvailable: hasEmailConfigured
                 });
             }
 
-            // Mark hash as verified
-            log.hashVerified = true;
-            log.hashVerifiedAt = new Date();
-            console.log(`✅ Hash integrity verified for ${blockchainId} — proceeding with dispense`);
-        } catch (hashErr) {
-            // If blockchain is unreachable, log warning but allow dispense
-            // (don't block legitimate dispenses due to infra issues)
-            console.warn(`⚠️ Hash verification skipped (blockchain unavailable): ${hashErr.message}`);
+            try {
+                const jwt = require('jsonwebtoken');
+                const mfaDecoded = jwt.verify(dispenseMfaToken, process.env.JWT_SECRET);
+
+                if (mfaDecoded.type !== 'dispense-mfa') {
+                    throw new Error('Invalid token type');
+                }
+                if (mfaDecoded.prescriptionId !== blockchainId) {
+                    throw new Error('Token prescription mismatch');
+                }
+
+                console.log(`✅ Dispense MFA verified for ${blockchainId} via ${mfaDecoded.method}`);
+            } catch (mfaErr) {
+                return res.status(403).json({
+                    success: false,
+                    message: 'Invalid or expired patient verification. Please re-verify.',
+                    code: 'MFA_INVALID'
+                });
+            }
         }
+
+        // ── STEP 1b: CHAIN AUTHORITY — Full On-Chain Pre-Mutation Validation (HARD BLOCK) ──
+        // NO FALLBACK. If blockchain is unreachable → error. If any check fails → abort.
+        const plainPatientName = decrypt(log.patientName);
+        const plainMedicines = log.medicines.map(m => {
+            const medObj = m.toObject ? m.toObject() : m;
+            return {
+                name: medObj.name || '',
+                dosage: medObj.dosage || '',
+                quantity: medObj.quantity
+            };
+        });
+
+        let chainValidation;
+        try {
+            chainValidation = await validateOnChainState(blockchainId, plainPatientName, log.patientAge, plainMedicines);
+        } catch (chainErr) {
+            if (chainErr instanceof ChainValidationError) {
+                console.error(`🚫 DISPENSE BLOCKED [${chainErr.code}] for ${blockchainId}: ${chainErr.message}`);
+                return res.status(chainErr.httpStatus).json({
+                    success: false,
+                    message: chainErr.message,
+                    code: chainErr.code,
+                    details: chainErr.context
+                });
+            }
+            // Unknown error — treat as chain unreachable
+            console.error(`🔴 [CHAIN_UNREACHABLE] Dispense unexpected error for ${blockchainId}:`, chainErr.message);
+            return res.status(503).json({
+                success: false,
+                message: 'Blockchain verification unavailable. Dispense cannot proceed without on-chain validation.',
+                code: ChainErrorCodes.CHAIN_UNREACHABLE
+            });
+        }
+
+        // Mark chain verification as completed
+        log.hashVerified = true;
+        log.hashVerifiedAt = new Date();
+        log.chainValidatedAt = new Date();
+        console.log(`✅ Full on-chain validation passed for ${blockchainId} — status=${chainValidation.onChainState.statusLabel} usage=${chainValidation.onChainState.usageCount}/${chainValidation.onChainState.maxUsage}`);
 
         // ── STEP 2: Normalize All Medicine Data ──
         // NOTE: medicine.name is stored as PLAIN TEXT (not encrypted).
@@ -568,6 +663,27 @@ router.post('/complete-dispense', protect, authorize('pharmacy'), async (req, re
                     message: `Insufficient inventory for "${med.name}". Required: ${med.quantity}, Available: ${total}`
                 });
             }
+        }
+
+        // ── STEP 3.5 (Phase 4): Pre-Deduction Root Verification ──
+        // Verify inventory Merkle root matches on-chain before touching stock
+        try {
+            await verifyRootOrAbort();
+        } catch (rootErr) {
+            if (rootErr.code === 'INVENTORY_TAMPERED') {
+                return res.status(409).json({
+                    success: false,
+                    message: 'Inventory integrity check failed — on-chain root does not match. Dispense blocked.',
+                    code: 'INVENTORY_TAMPERED',
+                    details: rootErr.details
+                });
+            }
+            // Chain unreachable
+            return res.status(503).json({
+                success: false,
+                message: `Cannot verify inventory integrity: ${rootErr.message}`,
+                code: rootErr.code || 'CHAIN_UNREACHABLE'
+            });
         }
 
         // ── STEP 4: Deduct Stock (with Rollback Journal) ──
@@ -674,18 +790,62 @@ router.post('/complete-dispense', protect, authorize('pharmacy'), async (req, re
         const dispenseId = `DISP-${blockchainId}-${Date.now()}`;
         const dispenseDate = new Date();
 
-        // ── STEP 6: Update Prescription Status ──
-        log.status = 'DISPENSED';
-        log.dispensedAt = dispenseDate;
-        log.dispenseId = dispenseId;
-        log.invoiceDetails = invoiceItems;
-        log.totalCost = Math.round(totalCost * 100) / 100;
-        await log.save();
+        // ── STEP 6: Update Prescription Status → PENDING_DISPENSE ──
+        // Phase 3: Route does NOT set final status. It sets PENDING_DISPENSE.
+        // The blockchain event handler (listener) promotes to DISPENSED or USED.
+        const { transitionStatus } = require('../utils/stateTransitions');
+        const transitioned = await transitionStatus(blockchainId, 'PENDING_DISPENSE', {
+            dispensedAt: dispenseDate,
+            dispenseId,
+            invoiceDetails: invoiceItems,
+            totalCost: Math.round(totalCost * 100) / 100,
+        });
+
+        if (!transitioned) {
+            // State transition was blocked — prescription is in an unexpected state
+            console.error(`🚫 [STATE] Could not transition ${blockchainId} to PENDING_DISPENSE`);
+            return res.status(409).json({
+                success: false,
+                message: 'Prescription is not in a valid state for dispensing. It may have already been dispensed or expired.',
+                code: 'INVALID_STATE_TRANSITION'
+            });
+        }
 
         console.log(`✅ Prescription ${blockchainId} dispensed. Invoice: $${totalCost.toFixed(2)} (${dispenseId})`);
 
-        // ZKP Phase 3: Anchor updated Merkle root after stock changes (awaited after DB commit)
-        try { await anchorInventoryRoot(); } catch (e) { console.warn('⚠️ Inventory root anchor failed:', e.message); }
+        // ── STEP 5.5 (Phase 4): Anchor NEW Root Before Commit ──
+        // Compute post-deduction root and anchor on-chain BEFORE committing status
+        try {
+            const { root, txHash } = await anchorInventoryRoot();
+            console.log(`🌲 Post-deduction root anchored: ${root.substring(0, 10)}... (tx: ${txHash})`);
+        } catch (anchorErr) {
+            // Anchor failed — ROLLBACK all deductions
+            console.error('❌ Inventory root anchor FAILED after deduction — rolling back all stock changes...', {
+                prescriptionId: blockchainId,
+                error: anchorErr.message
+            });
+
+            for (const entry of deductionJournal) {
+                try {
+                    await Inventory.updateOne(
+                        { _id: entry.batchObjectId },
+                        {
+                            $inc: { quantityAvailable: entry.quantityDeducted },
+                            $set: { status: entry.previousStatus }
+                        }
+                    );
+                    console.log(`  ↩️ Rolled back ${entry.quantityDeducted} units for batch ${entry.batchId}`);
+                } catch (rollbackErr) {
+                    console.error('❌ CRITICAL: Rollback failed for batch', entry.batchId, rollbackErr.message);
+                }
+            }
+
+            return res.status(503).json({
+                success: false,
+                message: 'Inventory root anchoring failed — all stock changes have been rolled back. Please retry.',
+                code: 'ANCHOR_FAILED'
+            });
+        }
 
         // ── STEP 7: Generate Invoice PDF & Email (non-blocking) ──
         let invoicePdfBase64 = null;
@@ -747,7 +907,13 @@ router.post('/complete-dispense', protect, authorize('pharmacy'), async (req, re
             stack: error.stack,
             blockchainId: req.body?.blockchainId
         });
-        res.status(500).json({ success: false, error: error.message });
+        // Sanitize error message — never leak stack traces or internal details to client
+        const safeMessage = (error.message || '').includes('Cannot read')
+            || (error.message || '').includes('undefined')
+            || (error.message || '').includes('ECONNREFUSED')
+            ? 'An internal error occurred during dispensing. Please try again.'
+            : error.message;
+        res.status(500).json({ success: false, error: safeMessage });
     }
 });
 

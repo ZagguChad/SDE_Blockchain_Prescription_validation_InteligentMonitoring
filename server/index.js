@@ -59,12 +59,17 @@ mongoose.connect(MONGO_URI, {
         const inventoryRoutes = require('./routes/inventory');
         const authRoutes = require('./routes/auth');
         const patientRoutes = require('./routes/patient');
+        const mfaRoutes = require('./routes/mfa');
 
         app.use('/api/prescriptions', prescriptionRoutes);
         app.use('/api/analytics', analyticsRoutes);
         app.use('/api/inventory', inventoryRoutes);
         app.use('/api/auth', authRoutes);
         app.use('/api/patient', patientRoutes);
+        app.use('/api/mfa', mfaRoutes);
+
+        const dispenseMfaRoutes = require('./routes/dispenseMfa');
+        app.use('/api/dispense-mfa', dispenseMfaRoutes);
 
         console.log('✅ API Routes Registered');
 

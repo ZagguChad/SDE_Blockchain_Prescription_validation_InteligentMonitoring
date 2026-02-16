@@ -1,5 +1,6 @@
 const cron = require('node-cron');
 const PrescriptionLog = require('../models/PrescriptionLog');
+const { transitionStatus } = require('../utils/stateTransitions');
 
 // Run every hour
 const startExpiryJob = () => {
@@ -9,21 +10,29 @@ const startExpiryJob = () => {
         try {
             const now = new Date();
 
-            // Find prescriptions that are expired but still marked as ACTIVE
+            // Find prescriptions that are expired but still in a non-terminal state
             const expiredPrescriptions = await PrescriptionLog.find({
                 expiryDate: { $lt: now },
-                status: 'ACTIVE'
+                status: { $in: ['ACTIVE', 'PENDING_DISPENSE', 'DISPENSED'] }
             });
 
             if (expiredPrescriptions.length > 0) {
                 console.log(`Found ${expiredPrescriptions.length} expired prescriptions. Updating status...`);
 
-                const result = await PrescriptionLog.updateMany(
-                    { _id: { $in: expiredPrescriptions.map(p => p._id) } },
-                    { $set: { status: 'EXPIRED' } }
-                );
+                let transitioned = 0;
+                let blocked = 0;
 
-                console.log(`✅ Updated ${result.modifiedCount} prescriptions to EXPIRED.`);
+                for (const rx of expiredPrescriptions) {
+                    // Phase 3: Use state transition guard
+                    const result = await transitionStatus(rx.blockchainId, 'EXPIRED');
+                    if (result) {
+                        transitioned++;
+                    } else {
+                        blocked++;
+                    }
+                }
+
+                console.log(`✅ Expiry Job: ${transitioned} transitioned to EXPIRED, ${blocked} blocked by state guard.`);
             } else {
                 console.log('No expired prescriptions found.');
             }
@@ -36,3 +45,4 @@ const startExpiryJob = () => {
 };
 
 module.exports = startExpiryJob;
+

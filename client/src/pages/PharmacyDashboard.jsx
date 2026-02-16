@@ -21,6 +21,18 @@ const PharmacyDashboard = ({ account }) => {
     const [invoiceData, setInvoiceData] = useState(null);
     const [hashVerified, setHashVerified] = useState(null); // ZKP Phase 2: null = not checked, true/false = result
 
+    // Dispense MFA State (Patient Re-Verification)
+    const [mfaStatus, setMfaStatus] = useState(null);       // { mfaRequired, totpEnabled, emailAvailable, maskedEmail }
+    const [showMfaModal, setShowMfaModal] = useState(false);
+    const [mfaStep, setMfaStep] = useState('totp');          // 'totp' | 'otp' | 'success' | 'blocked'
+    const [mfaCode, setMfaCode] = useState('');
+    const [mfaLoading, setMfaLoading] = useState(false);
+    const [mfaError, setMfaError] = useState('');
+    const [mfaSuccess, setMfaSuccess] = useState('');
+    const [dispenseMfaToken, setDispenseMfaToken] = useState(null);
+    const [otpSent, setOtpSent] = useState(false);
+    const [mfaAttemptsRemaining, setMfaAttemptsRemaining] = useState(5);
+
     // Inventory Tab State
     const [inventory, setInventory] = useState([]);
     const [newItem, setNewItem] = useState({
@@ -75,7 +87,10 @@ const PharmacyDashboard = ({ account }) => {
         setStatus('Fetching details...');
         setData(null);
         setChainData(null);
-        setHashVerified(null); // Reset hash verification on new search
+        setHashVerified(null);
+        setMfaStatus(null);
+        setDispenseMfaToken(null);
+        setShowMfaModal(false);
 
         try {
             // 1. Get Off-chain Metadata
@@ -95,13 +110,11 @@ const PharmacyDashboard = ({ account }) => {
 
                 const formattedId = ethers.encodeBytes32String(searchId);
                 const result = await contract.verifyPrescription(formattedId);
-                // verifyPrescription returns (bool exists, uint8 status, uint256 remaining)
                 const exists = result[0];
                 const onChainStatus = Number(result[1]);
                 const remaining = Number(result[2]);
 
                 if (!exists) {
-                    // Blockchain record not found — check DB sync flag
                     const dbSynced = res.data.data.blockchainSynced;
                     if (dbSynced) {
                         setStatus('⚠️ Blockchain record mismatch (possible Hardhat restart). Prescription may need re-sync.');
@@ -124,6 +137,17 @@ const PharmacyDashboard = ({ account }) => {
                 setChainData({ status: 'CHAIN_UNAVAILABLE', pendingSync: true });
             }
 
+            // 3. Fetch Dispense MFA Status
+            try {
+                const mfaRes = await axios.get(`http://localhost:5000/api/dispense-mfa/status/${encodeURIComponent(searchId)}`);
+                if (mfaRes.data.success) {
+                    setMfaStatus(mfaRes.data);
+                }
+            } catch (mfaErr) {
+                console.warn('MFA status check failed:', mfaErr.message);
+                setMfaStatus({ mfaRequired: false });
+            }
+
         } catch (error) {
             console.error(error);
             setStatus('Error fetching data: ' + error.message);
@@ -136,8 +160,110 @@ const PharmacyDashboard = ({ account }) => {
         return mapping[statusValues] || "UNKNOWN";
     };
 
-    const dispense = async () => {
+    // MFA Verification Handlers
+    const handleDispenseClick = () => {
+        // If MFA is required, show modal first. Otherwise, dispense directly.
+        if (mfaStatus?.mfaRequired && !dispenseMfaToken) {
+            setShowMfaModal(true);
+            setMfaStep(mfaStatus.totpEnabled ? 'totp' : 'otp');
+            setMfaCode('');
+            setMfaError('');
+            setMfaSuccess('');
+            setOtpSent(false);
+            setMfaAttemptsRemaining(5);
+        } else {
+            dispense();
+        }
+    };
+
+    const handleVerifyTotp = async () => {
+        if (!mfaCode || mfaCode.length !== 6) {
+            setMfaError('Please enter a 6-digit authenticator code.');
+            return;
+        }
+        setMfaLoading(true);
+        setMfaError('');
+        try {
+            const res = await axios.post('http://localhost:5000/api/dispense-mfa/verify-totp', {
+                prescriptionId: data.blockchainId,
+                token: mfaCode
+            });
+            if (res.data.success) {
+                setDispenseMfaToken(res.data.mfaToken);
+                setMfaStep('success');
+                setMfaSuccess('✅ Patient verified via authenticator!');
+                setTimeout(() => {
+                    setShowMfaModal(false);
+                    dispense(res.data.mfaToken);
+                }, 1200);
+            }
+        } catch (err) {
+            const msg = err.response?.data?.message || 'Verification failed.';
+            setMfaError(msg);
+            if (err.response?.data?.canFallbackToOtp) {
+                setMfaError(msg + ' You can use email OTP instead.');
+            }
+        }
+        setMfaLoading(false);
+        setMfaCode('');
+    };
+
+    const handleSendOtp = async () => {
+        setMfaLoading(true);
+        setMfaError('');
+        try {
+            const res = await axios.post('http://localhost:5000/api/dispense-mfa/send-otp', {
+                prescriptionId: data.blockchainId
+            });
+            if (res.data.success) {
+                setOtpSent(true);
+                setMfaStep('otp');
+                setMfaSuccess(`Code sent to ${res.data.maskedEmail}`);
+            }
+        } catch (err) {
+            setMfaError(err.response?.data?.message || 'Failed to send OTP.');
+        }
+        setMfaLoading(false);
+    };
+
+    const handleVerifyOtp = async () => {
+        if (!mfaCode || mfaCode.length !== 6) {
+            setMfaError('Please enter a 6-digit verification code.');
+            return;
+        }
+        setMfaLoading(true);
+        setMfaError('');
+        try {
+            const res = await axios.post('http://localhost:5000/api/dispense-mfa/verify-otp', {
+                prescriptionId: data.blockchainId,
+                otp: mfaCode
+            });
+            if (res.data.success) {
+                setDispenseMfaToken(res.data.mfaToken);
+                setMfaStep('success');
+                setMfaSuccess('✅ Patient verified via email code!');
+                setTimeout(() => {
+                    setShowMfaModal(false);
+                    dispense(res.data.mfaToken);
+                }, 1200);
+            }
+        } catch (err) {
+            const msg = err.response?.data?.message || 'Verification failed.';
+            setMfaError(msg);
+            if (err.response?.data?.attemptsRemaining !== undefined) {
+                setMfaAttemptsRemaining(err.response.data.attemptsRemaining);
+            }
+            if (err.response?.status === 429) {
+                setMfaStep('blocked');
+            }
+        }
+        setMfaLoading(false);
+        setMfaCode('');
+    };
+
+    const dispense = async (mfaTokenOverride) => {
         if (!account) return alert('Connect Wallet!');
+        const currentMfaToken = mfaTokenOverride || dispenseMfaToken;
         setLoading(true);
         try {
             const provider = new ethers.BrowserProvider(window.ethereum);
@@ -146,25 +272,22 @@ const PharmacyDashboard = ({ account }) => {
 
             const formattedId = ethers.encodeBytes32String(searchId);
 
-            // 1. Basic sanity check — backend performs authoritative validation
+            // 1. Basic sanity check
             if (!data.medicines || data.medicines.length === 0) {
-                throw new Error('Invalid prescription: No medicines found. Prescription data may be corrupted.');
+                throw new Error('Invalid prescription: No medicines found.');
             }
 
-            // 2. Pre-Check Validation (Backend Authoritative — stock check without deduction)
+            // 2. Pre-Check Validation (no patient signature — verified via TOTP/OTP)
             try {
                 const validateRes = await axios.post('http://localhost:5000/api/prescriptions/validate-dispense', {
                     blockchainId: data.blockchainId
                 });
 
                 if (!validateRes.data.success) {
-                    throw new Error(validateRes.data.message || "Validation failed");
+                    throw new Error(validateRes.data.message || 'Validation failed');
                 }
-                // ZKP Phase 2: Capture hash verification result
                 setHashVerified(validateRes.data.hashVerified === true);
-                console.log("✅ Backend Validation Passed", { hashVerified: validateRes.data.hashVerified });
             } catch (validationErr) {
-                console.error("Validation Error:", validationErr);
                 const serverMsg = validationErr.response?.data?.message || validationErr.message;
                 throw new Error(`Cannot Dispense: ${serverMsg}`);
             }
@@ -177,18 +300,15 @@ const PharmacyDashboard = ({ account }) => {
             setStatus('Dispensed on-chain! Updating inventory & generating invoice...');
             setChainData(prev => ({ ...prev, status: 'DISPENSED' }));
 
-            // 4. Complete Dispense — SINGLE server call handles:
-            //    Stock deduction + Invoice computation + PDF generation + Email
-            //    (No separate /consume call — fixes double-deduction bug)
+            // 4. Complete Dispense — includes MFA token if available
             try {
                 const dispenseRes = await axios.post('http://localhost:5000/api/prescriptions/complete-dispense', {
-                    blockchainId: data.blockchainId
+                    blockchainId: data.blockchainId,
+                    dispenseMfaToken: currentMfaToken || undefined
                 });
 
                 if (dispenseRes.data.success) {
                     setStatus('Dispensed, Stock Updated & Invoice Generated!');
-
-                    // Render Invoice Data from server response (not client-computed)
                     setInvoiceData({
                         blockchainId: data.blockchainId,
                         dispenseId: dispenseRes.data.dispenseId,
@@ -202,21 +322,24 @@ const PharmacyDashboard = ({ account }) => {
                     setStatus('Dispensed on-chain, but server-side processing failed: ' + (dispenseRes.data.message || 'Unknown error'));
                 }
             } catch (finalErr) {
-                console.error("Complete Dispense Error:", finalErr);
                 const serverMsg = finalErr.response?.data?.message || finalErr.message;
                 setStatus(`Dispensed on-chain, but server error: ${serverMsg}`);
             }
 
             fetchActivity();
 
+            // Auto-refresh prescription data to get updated status from chain
+            setTimeout(() => handleSearch(), 1500);
+
         } catch (error) {
-            console.error(error);
             let msg = error.reason || error.message;
-            if (msg.includes("Not a pharmacy")) msg = "Access Denied: You are not a registered Pharmacy.";
-            if (msg.includes("Prescription expired")) msg = "Cannot dispense: Prescription has EXPIRED.";
+            if (msg.includes('Not a pharmacy')) msg = 'Access Denied: You are not a registered Pharmacy.';
+            if (msg.includes('Prescription expired')) msg = 'Cannot dispense: Prescription has EXPIRED.';
+            if (msg.includes('already been dispensed') || msg.includes('already dispensed')) msg = 'Cannot dispense: Prescription has already been DISPENSED.';
             setStatus('Error: ' + msg);
         }
         setLoading(false);
+        setDispenseMfaToken(null);
     };
 
     // Download Invoice PDF from base64
@@ -389,14 +512,57 @@ const PharmacyDashboard = ({ account }) => {
                             </div>
 
                             {chainData.status === 'ACTIVE' && data.medicines && data.medicines.length > 0 && (
-                                <div className="flex justify-end" style={{ marginTop: 'var(--space-lg)', paddingTop: 'var(--space-lg)', borderTop: '1px solid var(--glass-border)' }}>
-                                    <button
-                                        className="btn"
-                                        style={{ background: 'linear-gradient(135deg, var(--secondary), #db2777)', width: '100%', maxWidth: '300px' }}
-                                        onClick={dispense}
-                                    >
-                                        Dispense Medicine
-                                    </button>
+                                <div style={{ marginTop: 'var(--space-lg)', paddingTop: 'var(--space-lg)', borderTop: '1px solid var(--glass-border)' }}>
+                                    {/* MFA Status Indicator */}
+                                    {mfaStatus?.mfaRequired && (
+                                        <div style={{ background: 'rgba(245, 158, 11, 0.1)', border: '1px solid rgba(245, 158, 11, 0.3)', borderRadius: 'var(--radius-sm)', padding: 'var(--space-sm) var(--space-md)', marginBottom: 'var(--space-md)', display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+                                            <span style={{ fontSize: '1.2rem' }}>🔐</span>
+                                            <div>
+                                                <p style={{ margin: 0, fontSize: '0.85rem', fontWeight: 600, color: '#f59e0b' }}>Patient Verification Required</p>
+                                                <p style={{ margin: 0, fontSize: '0.75rem', color: 'var(--text-muted)' }}>
+                                                    {mfaStatus.totpEnabled ? 'Authenticator code' : 'Email verification'} required before dispensing
+                                                    {dispenseMfaToken && ' — ✅ Verified'}
+                                                </p>
+                                            </div>
+                                        </div>
+                                    )}
+
+                                    <div className="flex justify-end">
+                                        <button
+                                            className="btn"
+                                            style={{ background: 'linear-gradient(135deg, var(--secondary), #db2777)', width: '100%', maxWidth: '300px' }}
+                                            onClick={handleDispenseClick}
+                                            disabled={loading}
+                                        >
+                                            {loading ? 'Processing...' : mfaStatus?.mfaRequired && !dispenseMfaToken ? '🔐 Verify Patient & Dispense' : 'Dispense Medicine'}
+                                        </button>
+                                    </div>
+                                </div>
+                            )}
+
+                            {/* Safeguard: Non-dispensable status messages */}
+                            {chainData.status === 'USED' && (
+                                <div style={{ marginTop: 'var(--space-lg)', paddingTop: 'var(--space-lg)', borderTop: '1px solid var(--glass-border)', textAlign: 'center' }}>
+                                    <div style={{ background: 'rgba(239, 68, 68, 0.1)', border: '1px solid rgba(239, 68, 68, 0.3)', borderRadius: 'var(--radius-sm)', padding: 'var(--space-md)', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '0.5rem' }}>
+                                        <span style={{ fontSize: '1.5rem' }}>✅</span>
+                                        <p style={{ margin: 0, fontWeight: 600, color: '#ef4444' }}>This prescription has already been dispensed.</p>
+                                    </div>
+                                </div>
+                            )}
+                            {chainData.status === 'EXPIRED' && (
+                                <div style={{ marginTop: 'var(--space-lg)', paddingTop: 'var(--space-lg)', borderTop: '1px solid var(--glass-border)', textAlign: 'center' }}>
+                                    <div style={{ background: 'rgba(239, 68, 68, 0.1)', border: '1px solid rgba(239, 68, 68, 0.3)', borderRadius: 'var(--radius-sm)', padding: 'var(--space-md)', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '0.5rem' }}>
+                                        <span style={{ fontSize: '1.5rem' }}>⏰</span>
+                                        <p style={{ margin: 0, fontWeight: 600, color: '#ef4444' }}>This prescription has expired and cannot be dispensed.</p>
+                                    </div>
+                                </div>
+                            )}
+                            {chainData.status === 'DISPENSED' && (
+                                <div style={{ marginTop: 'var(--space-lg)', paddingTop: 'var(--space-lg)', borderTop: '1px solid var(--glass-border)', textAlign: 'center' }}>
+                                    <div style={{ background: 'rgba(34, 197, 94, 0.1)', border: '1px solid rgba(34, 197, 94, 0.3)', borderRadius: 'var(--radius-sm)', padding: 'var(--space-md)', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '0.5rem' }}>
+                                        <span style={{ fontSize: '1.5rem' }}>✅</span>
+                                        <p style={{ margin: 0, fontWeight: 600, color: '#22c55e' }}>Prescription dispensed successfully.</p>
+                                    </div>
                                 </div>
                             )}
                         </div>
@@ -580,6 +746,148 @@ const PharmacyDashboard = ({ account }) => {
                                 </tbody>
                             </table>
                         </div>
+                    </div>
+                </div>
+            )}
+
+            {/* Patient Verification Modal */}
+            {showMfaModal && (
+                <div className="mfa-modal-overlay" onClick={() => setShowMfaModal(false)}>
+                    <div className="mfa-modal" onClick={e => e.stopPropagation()}>
+                        <div className="mfa-modal-header">
+                            <h3 style={{ margin: 0 }}>🔐 Patient Verification Required</h3>
+                            <button className="mfa-modal-close" onClick={() => setShowMfaModal(false)}>✕</button>
+                        </div>
+
+                        {mfaStatus?.patientName && (
+                            <p style={{ textAlign: 'center', color: 'var(--text-muted)', margin: '0 0 1rem' }}>
+                                Verifying: <strong style={{ color: 'var(--text-main)' }}>{mfaStatus.patientName}</strong>
+                            </p>
+                        )}
+
+                        {mfaStep === 'success' && (
+                            <div className="mfa-success-block">
+                                <span style={{ fontSize: '3rem' }}>✅</span>
+                                <p style={{ fontSize: '1.1rem', fontWeight: 600 }}>{mfaSuccess}</p>
+                                <p className="text-muted text-sm">Proceeding to dispense...</p>
+                            </div>
+                        )}
+
+                        {mfaStep === 'blocked' && (
+                            <div className="mfa-blocked-block">
+                                <span style={{ fontSize: '3rem' }}>🔒</span>
+                                <p style={{ fontSize: '1.1rem', fontWeight: 600, color: 'var(--error)' }}>Verification Locked</p>
+                                <p className="text-muted text-sm">Too many failed attempts. Please wait 30 minutes.</p>
+                                <button className="btn btn-outline" onClick={() => setShowMfaModal(false)}>Close</button>
+                            </div>
+                        )}
+
+                        {mfaStep === 'totp' && (
+                            <div className="mfa-step-content">
+                                <div className="mfa-step-badge">Step 1: Authenticator Code</div>
+                                <p className="text-sm text-muted" style={{ textAlign: 'center' }}>
+                                    Ask the patient for their Google Authenticator code
+                                </p>
+                                <input
+                                    className="input-field mfa-code-input"
+                                    type="text"
+                                    maxLength={6}
+                                    placeholder="000000"
+                                    value={mfaCode}
+                                    onChange={e => setMfaCode(e.target.value.replace(/\D/g, ''))}
+                                    onKeyDown={e => e.key === 'Enter' && handleVerifyTotp()}
+                                    autoFocus
+                                />
+                                {mfaError && <p className="mfa-error">{mfaError}</p>}
+                                <button
+                                    className="btn mfa-verify-btn"
+                                    onClick={handleVerifyTotp}
+                                    disabled={mfaLoading || mfaCode.length !== 6}
+                                >
+                                    {mfaLoading ? 'Verifying...' : 'Verify Code'}
+                                </button>
+                                <div className="mfa-divider">
+                                    <span>or</span>
+                                </div>
+                                <button
+                                    className="btn btn-outline mfa-fallback-btn"
+                                    onClick={handleSendOtp}
+                                    disabled={mfaLoading}
+                                >
+                                    📧 Send OTP to Patient Email
+                                </button>
+                            </div>
+                        )}
+
+                        {mfaStep === 'otp' && (
+                            <div className="mfa-step-content">
+                                <div className="mfa-step-badge" style={{ background: 'rgba(59, 130, 246, 0.15)', color: '#3b82f6' }}>
+                                    {mfaStatus?.totpEnabled ? 'Fallback: Email Verification' : 'Email Verification'}
+                                </div>
+                                {!otpSent ? (
+                                    <>
+                                        <p className="text-sm text-muted" style={{ textAlign: 'center' }}>
+                                            Send a verification code to: <strong>{mfaStatus?.maskedEmail || 'patient email'}</strong>
+                                        </p>
+                                        {mfaError && <p className="mfa-error">{mfaError}</p>}
+                                        <button
+                                            className="btn mfa-verify-btn"
+                                            style={{ background: 'linear-gradient(135deg, #3b82f6, #2563eb)' }}
+                                            onClick={handleSendOtp}
+                                            disabled={mfaLoading}
+                                        >
+                                            {mfaLoading ? 'Sending...' : '📧 Send Verification Code'}
+                                        </button>
+                                    </>
+                                ) : (
+                                    <>
+                                        {mfaSuccess && <p className="mfa-success-text">{mfaSuccess}</p>}
+                                        <p className="text-sm text-muted" style={{ textAlign: 'center' }}>
+                                            Enter the 6-digit code sent to the patient's email
+                                        </p>
+                                        <input
+                                            className="input-field mfa-code-input"
+                                            type="text"
+                                            maxLength={6}
+                                            placeholder="000000"
+                                            value={mfaCode}
+                                            onChange={e => setMfaCode(e.target.value.replace(/\D/g, ''))}
+                                            onKeyDown={e => e.key === 'Enter' && handleVerifyOtp()}
+                                            autoFocus
+                                        />
+                                        {mfaError && <p className="mfa-error">{mfaError}</p>}
+                                        <p className="text-sm text-muted" style={{ textAlign: 'center' }}>
+                                            Attempts remaining: {mfaAttemptsRemaining}
+                                        </p>
+                                        <button
+                                            className="btn mfa-verify-btn"
+                                            style={{ background: 'linear-gradient(135deg, #3b82f6, #2563eb)' }}
+                                            onClick={handleVerifyOtp}
+                                            disabled={mfaLoading || mfaCode.length !== 6}
+                                        >
+                                            {mfaLoading ? 'Verifying...' : 'Verify Code'}
+                                        </button>
+                                        <button
+                                            className="btn btn-outline mfa-fallback-btn"
+                                            onClick={handleSendOtp}
+                                            disabled={mfaLoading}
+                                            style={{ fontSize: '0.8rem' }}
+                                        >
+                                            Resend Code
+                                        </button>
+                                    </>
+                                )}
+                                {mfaStatus?.totpEnabled && (
+                                    <button
+                                        className="btn btn-outline mfa-fallback-btn"
+                                        onClick={() => { setMfaStep('totp'); setMfaCode(''); setMfaError(''); }}
+                                        style={{ fontSize: '0.8rem', marginTop: '0.5rem' }}
+                                    >
+                                        ← Back to Authenticator
+                                    </button>
+                                )}
+                            </div>
+                        )}
                     </div>
                 </div>
             )}

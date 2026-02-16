@@ -1,8 +1,13 @@
 /**
- * Inventory Merkle Root — ZKP Phase 3 (Stabilized)
+ * Inventory Merkle Root — ZKP Phase 3 + Phase 4 (Root Authority)
  * 
  * ALL snapshot construction delegated to canonicalSnapshot.js.
  * This module ONLY handles Merkle tree math + blockchain I/O.
+ * 
+ * Phase 4 additions:
+ *   - verifyRootOrAbort(): Pre-deduction tamper detection
+ *   - anchorInventoryRoot(): Now THROWS on failure (not fire-and-forget)
+ *   - logRootDiff(): Forensic logging on mismatch
  * 
  * Tree: binary Merkle with keccak256 sorted pairing.
  * Leaf: deterministicHash(canonicalBatchSnapshot) per ACTIVE batch.
@@ -61,45 +66,118 @@ async function computeInventoryRoot() {
 }
 
 /**
- * Compute and anchor the inventory Merkle root on-chain.
- * MUST be called AFTER DB writes have committed.
- * @returns {Promise<{root: string, txHash: string|null}>}
+ * Get a contract connection for inventory root operations.
+ * @param {boolean} needsSigner — If true, returns a signer-connected contract
+ * @returns {{ provider, contract }}
+ */
+function getInventoryContract(needsSigner = false) {
+    const contractInfo = require('../contractInfo.json');
+    const provider = new ethers.JsonRpcProvider(process.env.BLOCKCHAIN_RPC || 'http://127.0.0.1:8545');
+
+    if (needsSigner) {
+        const deployerKey = process.env.DEPLOYER_PRIVATE_KEY || '0xac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80';
+        const wallet = new ethers.Wallet(deployerKey, provider);
+        const contract = new ethers.Contract(contractInfo.address, contractInfo.abi, wallet);
+        return { provider, contract };
+    }
+
+    const contract = new ethers.Contract(contractInfo.address, contractInfo.abi, provider);
+    return { provider, contract };
+}
+
+/**
+ * Fetch the on-chain inventory root.
+ * @returns {Promise<string>} bytes32 on-chain root
+ * @throws {Error} If blockchain is unreachable
+ */
+async function fetchOnChainRoot() {
+    const { contract } = getInventoryContract(false);
+    return await contract.getInventoryRoot();
+}
+
+/**
+ * Log a detailed root diff for forensic analysis.
+ * @param {string} computedRoot — Root computed from DB
+ * @param {string} onChainRoot — Root from blockchain
+ * @param {number} batchCount — Number of active batches
+ */
+function logRootDiff(computedRoot, onChainRoot, batchCount) {
+    console.error('🔴 [INVENTORY TAMPER] Root mismatch detected!');
+    console.error(`   Computed (DB):  ${computedRoot}`);
+    console.error(`   On-chain:       ${onChainRoot}`);
+    console.error(`   Active batches: ${batchCount}`);
+    console.error(`   Timestamp:      ${new Date().toISOString()}`);
+    console.error('   ⚠️ Inventory may have been tampered with outside the application.');
+}
+
+/**
+ * Phase 4: Pre-deduction tamper detection.
+ * Computes current inventory root from DB and compares to on-chain root.
+ * THROWS if roots don't match — caller must catch and abort.
+ * 
+ * @returns {Promise<{root: string, batchCount: number}>} Current root if valid
+ * @throws {Error} INVENTORY_TAMPERED if roots mismatch
+ * @throws {Error} CHAIN_UNREACHABLE if blockchain unavailable
+ */
+async function verifyRootOrAbort() {
+    const { root, batchCount } = await computeInventoryRoot();
+
+    let onChainRoot;
+    try {
+        onChainRoot = await fetchOnChainRoot();
+    } catch (err) {
+        const error = new Error(`Blockchain unreachable — cannot verify inventory integrity: ${err.message}`);
+        error.code = 'CHAIN_UNREACHABLE';
+        throw error;
+    }
+
+    // ZeroHash means no root has been anchored yet — first-time setup, allow
+    if (onChainRoot !== ethers.ZeroHash && root !== onChainRoot) {
+        logRootDiff(root, onChainRoot, batchCount);
+        const error = new Error('Inventory integrity check failed — on-chain root does not match current inventory.');
+        error.code = 'INVENTORY_TAMPERED';
+        error.details = { computedRoot: root, onChainRoot, batchCount };
+        throw error;
+    }
+
+    console.log(`✅ [ROOT CHECK] Inventory root verified: ${root.substring(0, 10)}... (${batchCount} batches)`);
+    return { root, batchCount };
+}
+
+/**
+ * Phase 4: Compute and anchor the inventory Merkle root on-chain.
+ * THROWS on failure — callers MUST handle and rollback.
+ * 
+ * @returns {Promise<{root: string, txHash: string}>}
+ * @throws {Error} If anchoring fails (RPC error, tx revert, etc.)
  */
 async function anchorInventoryRoot() {
     const { root, batchCount } = await computeInventoryRoot();
 
-    try {
-        const contractInfo = require('../contractInfo.json');
-        const provider = new ethers.JsonRpcProvider(process.env.BLOCKCHAIN_RPC || 'http://127.0.0.1:8545');
-        const deployerKey = process.env.DEPLOYER_PRIVATE_KEY || '0xac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80';
-        const wallet = new ethers.Wallet(deployerKey, provider);
-        const contract = new ethers.Contract(contractInfo.address, contractInfo.abi, wallet);
+    const { contract } = getInventoryContract(true);
 
-        const tx = await contract.updateInventoryRoot(root);
-        const receipt = await tx.wait();
+    const tx = await contract.updateInventoryRoot(root);
+    const receipt = await tx.wait();
 
-        console.log(`🌲 Inventory root anchored: ${root.substring(0, 10)}... (${batchCount} ACTIVE batches, tx: ${receipt.hash})`);
-        return { root, txHash: receipt.hash };
-    } catch (err) {
-        console.warn(`⚠️ Inventory root anchoring failed: ${err.message}`);
-        return { root, txHash: null };
-    }
+    console.log(`🌲 Inventory root anchored: ${root.substring(0, 10)}... (${batchCount} ACTIVE batches, tx: ${receipt.hash})`);
+    return { root, txHash: receipt.hash };
 }
 
 /**
- * Verify current inventory against on-chain root.
+ * Verify current inventory against on-chain root (non-throwing version).
+ * Used for read-only audit checks.
  * @returns {Promise<{valid: boolean, currentRoot: string, onChainRoot: string, batchCount: number}>}
  */
 async function verifyInventoryRoot() {
     const { root, batchCount } = await computeInventoryRoot();
 
     try {
-        const contractInfo = require('../contractInfo.json');
-        const provider = new ethers.JsonRpcProvider(process.env.BLOCKCHAIN_RPC || 'http://127.0.0.1:8545');
-        const contract = new ethers.Contract(contractInfo.address, contractInfo.abi, provider);
+        const onChainRoot = await fetchOnChainRoot();
+        const valid = root === onChainRoot || onChainRoot === ethers.ZeroHash;
 
-        const onChainRoot = await contract.getInventoryRoot();
-        const valid = root === onChainRoot;
+        if (!valid) {
+            logRootDiff(root, onChainRoot, batchCount);
+        }
 
         return { valid, currentRoot: root, onChainRoot, batchCount };
     } catch (err) {
@@ -113,5 +191,8 @@ module.exports = {
     buildMerkleRoot,
     computeInventoryRoot,
     anchorInventoryRoot,
-    verifyInventoryRoot
+    verifyInventoryRoot,
+    verifyRootOrAbort,
+    fetchOnChainRoot,
+    logRootDiff,
 };

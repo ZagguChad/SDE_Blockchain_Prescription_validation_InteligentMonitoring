@@ -23,8 +23,7 @@ const generateProtectedPDF = async (prescriptionData, password) => {
         notes,
         diagnosis,
         expiryDate,
-        doctorAddress,
-        patientPrivateKey  // ZKP Phase 1: embedded for self-sovereign auth
+        doctorAddress
     } = prescriptionData;
 
     // Create a new PDF document
@@ -166,56 +165,6 @@ const generateProtectedPDF = async (prescriptionData, password) => {
 
     yPosition -= 55;
 
-    // ZKP Phase 1: Secure Authentication Key (only for new prescriptions)
-    if (patientPrivateKey) {
-        page.drawRectangle({
-            x: 50,
-            y: yPosition - 65,
-            width: width - 100,
-            height: 75,
-            borderColor: rgb(0.85, 0.15, 0.15),
-            borderWidth: 2,
-            color: rgb(1, 0.95, 0.95)
-        });
-
-        page.drawText('SECURE AUTHENTICATION KEY', {
-            x: 60,
-            y: yPosition - 15,
-            size: 10,
-            font: helveticaBold,
-            color: rgb(0.85, 0.15, 0.15)
-        });
-
-        page.drawText('DO NOT SHARE — This key proves your prescription ownership', {
-            x: 60,
-            y: yPosition - 28,
-            size: 8,
-            font: helvetica,
-            color: rgb(0.6, 0.1, 0.1)
-        });
-
-        // Split long key across two lines
-        const keyPart1 = patientPrivateKey.substring(0, 34);
-        const keyPart2 = patientPrivateKey.substring(34);
-
-        page.drawText(keyPart1, {
-            x: 60,
-            y: yPosition - 43,
-            size: 8,
-            font: helvetica,
-            color: rgb(0, 0, 0)
-        });
-
-        page.drawText(keyPart2, {
-            x: 60,
-            y: yPosition - 55,
-            size: 8,
-            font: helvetica,
-            color: rgb(0, 0, 0)
-        });
-
-        yPosition -= 80;
-    }
 
     // Diagnosis
     if (diagnosis) {

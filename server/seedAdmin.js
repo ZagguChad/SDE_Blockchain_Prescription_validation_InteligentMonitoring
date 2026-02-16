@@ -15,8 +15,8 @@ async function seedAdmin() {
             useUnifiedTopology: true
         });
 
-        const adminEmail = 'admin@blockrx.com';
-        const adminPass = 'admin123';
+        const adminEmail = process.env.ADMIN_EMAIL || 'admin@blockrx.com';
+        const adminPass = process.env.ADMIN_PASS || 'admin123';
 
         const userExists = await User.findOne({ email: adminEmail });
         if (userExists) {

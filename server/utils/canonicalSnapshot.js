@@ -45,7 +45,7 @@ function buildBatchSnapshot(batch) {
  */
 async function buildInventorySnapshot() {
     const batches = await Inventory.find({ status: 'ACTIVE' })
-        .sort({ batchId: 1 })
+        .sort({ medicineId: 1, batchId: 1 })
         .lean();
 
     const snapshot = batches.map(b => buildBatchSnapshot(b));

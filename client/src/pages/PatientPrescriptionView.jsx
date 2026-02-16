@@ -1,5 +1,6 @@
 import { useState, useEffect } from 'react';
 import { useAuth } from '../context/AuthContext';
+import { useNavigate } from 'react-router-dom';
 import axios from 'axios';
 
 function PatientPrescriptionView() {
@@ -7,6 +8,7 @@ function PatientPrescriptionView() {
     const [prescription, setPrescription] = useState(null);
     const [loading, setLoading] = useState(true);
     const [error, setError] = useState('');
+    const navigate = useNavigate();
 
     useEffect(() => {
         const fetchPrescription = async () => {
@@ -47,7 +49,10 @@ function PatientPrescriptionView() {
         <div className="page-container">
             <div className="header-row">
                 <h2>My Prescription</h2>
-                <button onClick={logout} className="btn btn-outline-danger">Exit / Logout</button>
+                <div style={{ display: 'flex', gap: '8px' }}>
+                    <button onClick={() => navigate('/patient/settings')} className="btn btn-outline">🔐 Security</button>
+                    <button onClick={logout} className="btn btn-outline-danger">Exit / Logout</button>
+                </div>
             </div>
 
             <div className="card animate-scale-in">
@@ -94,6 +99,28 @@ function PatientPrescriptionView() {
                         <p style={{ marginTop: '5px' }}>{prescription.notes}</p>
                     </div>
                 )}
+            </div>
+
+            {/* Authenticator Status */}
+            <div className="card" style={{ marginTop: 'var(--space-md)', border: prescription.totpEnabled ? '1px solid #22c55e' : '1px solid #f59e0b' }}>
+                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '0.8rem' }}>
+                        <span style={{ fontSize: '1.5rem' }}>{prescription.totpEnabled ? '✅' : '⚠️'}</span>
+                        <div>
+                            <p style={{ margin: 0, fontWeight: 600 }}>
+                                {prescription.totpEnabled ? 'Authenticator Active' : 'Set Up Authenticator'}
+                            </p>
+                            <p className="text-sm text-muted" style={{ margin: 0 }}>
+                                {prescription.totpEnabled
+                                    ? 'Your Google Authenticator is set up for pharmacy verification.'
+                                    : 'Set up Google Authenticator for secure pharmacy verification.'}
+                            </p>
+                        </div>
+                    </div>
+                    <button onClick={() => navigate('/patient/settings')} className="btn btn-sm btn-outline">
+                        {prescription.totpEnabled ? '⚙️ Manage' : '📱 Set Up'}
+                    </button>
+                </div>
             </div>
 
             <div className="text-center" style={{ marginTop: 'var(--space-xl)' }}>
